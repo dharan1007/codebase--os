@@ -13,34 +13,33 @@ export function infoCommand() {
 
             // 1. Vision
             console.log(chalk.bold('🌟 VISION'));
-            console.log('Codebase OS is an intelligent codebase management system designed to make');
-            console.log('software development autonomous, secure, and resilient. It bridge the gap');
-            console.log('between raw AI and actual file-system engineering.\n');
+            console.log('Codebase OS is a proprietary intelligent codebase management system.');
+            console.log('It is designed to make software development autonomous and resilient.');
+            console.log(chalk.yellow('Status: All Rights Reserved. Not Open Source.\n'));
 
             // 2. Commands & Guide
             console.log(chalk.bold('🛠️  TECHNICAL GUIDE & COMMANDS'));
-            console.log(`${chalk.cyan('cos init')}          Initialize Codebase OS in your project root.`);
-            console.log(`${chalk.cyan('cos config')}        Setup your AI provider (OpenRouter, Gemini, etc.).`);
-            console.log(`${chalk.cyan('cos ask')}           Solve a specific bug or implementation in plain English.`);
-            console.log(`${chalk.cyan('cos agent')}         Launch an autonomous agent for complex, multi-step tasks.`);
-            console.log(`${chalk.cyan('cos scan')}          Build a local relationship graph of all types and symbols.`);
-            console.log(`${chalk.cyan('cos fix')}           Automatically detect and fix compilation errors.`);
-            console.log(`${chalk.cyan('cos visualize')}     Launch an interactive HTML dashboard for your codebase.\n`);
+            console.log(`${chalk.cyan('cos init')}          Prepare your project for Codebase OS.`);
+            console.log(`${chalk.cyan('cos config')}        Setup your AI provider securely.`);
+            console.log(`${chalk.cyan('cos ask')}           Solve bugs or implement logic in plain English.`);
+            console.log(`${chalk.cyan('cos agent')}         Launch the autonomous engineering agent.`);
+            console.log(`${chalk.cyan('cos scan')}          Build/Update the project relationship graph.`);
+            console.log(`${chalk.cyan('cos fix')}           Identify and repair compile-time errors.`);
+            console.log(`${chalk.cyan('cos info')}          Display this technical manual.\n`);
 
             // 3. Developer Information
-            console.log(chalk.bold('👤 DEVELOPER INFORMATION'));
+            console.log(chalk.bold('👤 OWNER INFORMATION'));
             console.log(`${chalk.white('Author:')}    Dharantej Reddy Poduvu`);
             console.log(`${chalk.white('Location:')}  India`);
             console.log(`${chalk.white('Email:')}     dharan.poduvu@gmail.com`);
-            console.log(`${chalk.white('Verson:')}    v1.0.0 (Production Ready)\n`);
+            console.log(`${chalk.white('License:')}   Proprietary (No Modification Allowed)\n`);
 
-            // 4. Legal & Safety (OWN RISK)
-            console.log(chalk.bold.red('⚠️  LEGAL DISCLAIMER & SAFETY'));
-            console.log(chalk.yellow('The use of Codebase OS is at your OWN RISK.'));
-            console.log('Codebase OS uses AI to modify source code. Dharantej Reddy Poduvu is NOT');
-            console.log('responsible for any data loss, system damage, or unintended code changes.');
-            console.log(chalk.bold('Safety Rule: Always use Codebase OS in a Git-controlled repository.'));
-            console.log('AI-suggested changes should be verified before manual deployment.\n');
+            // 4. Legal & Safety (STRICT)
+            console.log(chalk.bold.red('⚠️  LEGAL NOTICE & DISCLAIMER'));
+            console.log(chalk.red('PROPRIETARY SOFTWARE: All modification and redistribution is FORBIDDEN.'));
+            console.log(chalk.yellow('Usage is at your OWN RISK. Dharantej Reddy Poduvu is NOT responsible'));
+            console.log('for any data loss, code corruption, or system damage caused by the agent.');
+            console.log(chalk.bold('Backups are mandatory. Verify all AI changes before committing.\n'));
 
             console.log(chalk.gray('───────────────────────────────────────────────────────────────────'));
             console.log(chalk.cyan('For more info, visit the GitHub repository or contact the author.\n'));

@@ -1,26 +1,22 @@
-MIT License
+PROPRIETARY LICENSE — CODEBASE OS
 
-IMPORTANT DISCLAIMER:
-The use of this software (Codebase OS) is at the user's sole risk. The software uses Artificial Intelligence to perform file modifications. Artificial Intelligence can be unpredictable and may cause unintended changes, data loss, or other damages. 
+Copyright (c) 2024 Dharantej Reddy Poduvu. All Rights Reserved.
 
-Dharantej Reddy Poduvu and any contributors are NOT responsible for any damage, data loss, or issues caused by the operation of this software. By using Codebase OS, you agree that you are fully responsible for maintaining backups and verifying all changes before application.
+1. PERMITTED USE
+Permission is hereby granted to any person obtaining a copy of this software and associated documentation files (the "Software") to use the Software for personal or internal business purposes ONLY.
 
-Copyright (c) 2024 Dharantej Reddy Poduvu
+2. PROHIBITIONS
+You are strictly PROHIBITED from:
+(a) Modifying, adapting, translating, or creating derivative works (building over) of the Software.
+(b) Redistributing, sublicensing, renting, leasing, or selling the Software or any portion thereof.
+(c) Removing or altering any copyright notices, branding, or credits within the Software.
+(d) Pushing unauthorized modifications to any public or private version control system (Git, etc.).
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+3. DISCLAIMER OF LIABILITY (USE AT OWN RISK)
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+IN NO EVENT SHALL THE AUTHOR (DHARANTEJ REDDY PODUVU) BE LIABLE FOR ANY CLAIM, DAMAGES, DATA LOSS, SYSTEM CORRUPTION, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+By using this software, you acknowledge that you assume all risks associated with AI-driven file modifications.
+
+For licensing inquiries or permissions, contact: dharan.poduvu@gmail.com

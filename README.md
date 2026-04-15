@@ -1,32 +1,28 @@
 # Codebase OS — Intelligent Codebase Management
 ![Codebase OS Hero](assets/hero.png)
 
-> **Codebase OS** is a foundational layer for intelligent software development. It turns your directory into a living, queryable, and autonomous entity.
+> **Codebase OS** is a proprietary foundational layer for intelligent software development. 
+> 🔒 **Status: All Rights Reserved. Not Open Source.**
 
 ---
 
-## 🌟 Vision
-Traditional IDEs see code as text. **Codebase OS** sees code as a multi-dimensional graph of relationships, symbols, and intent. It provides the "OS primitives" that allow AI agents to navigate, modify, and verify complex software projects with zero human supervision.
+## 🛑 Proprietary Notice
+**Codebase OS is PROPRIETARY SOFTWARE.** 
+- You may NOT copy, modify, translate, or build over this code.
+- You may NOT redistribute or sell this software.
+- Unauthorized modifications and pushing them to Git is strictly forbidden.
+- **Copyright (c) 2024 Dharantej Reddy Poduvu.**
 
 ---
 
-## 🚀 Key Features
+## 🚀 How to Use Codebase OS
 
-| Feature | Description |
-| :--- | :--- |
-| **Autonomous Agent** | A full-loop agent that reads, writes, and verifies code independently. |
-| **Blinker Discovery** | 100% accurate symbol tracking using TS-Morph (Find Usages / Rename). |
-| **Deep Vision** | Local, zero-cost regex and symbolic search tools. |
-| **Self-Healing** | Automatically detects and fixes compilation errors introduced by AI. |
-| **Visualizer** | Interactive HTML dashboards showing your project's architectural graph. |
-
----
-
-## 🛠️ Installation
+### 1. Installation
+To use Codebase OS in your project, follow these steps:
 
 ```bash
-# Clone the repository
-git clone https://github.com/dharan1007/codebase-os.git
+# Clone the repository (Access is for usage only)
+git clone https://github.com/dharan1007/codebase--os.git
 
 # Install dependencies
 cd codebase-os
@@ -39,31 +35,32 @@ npm run build
 npm link
 ```
 
+### 2. Getting Started
+1. **Initialize**: Run `cos init` in your project root to prepare the environment.
+2. **Configure**: Run `cos config` to link your AI provider (e.g., OpenRouter or Gemini).
+3. **Analyze**: Run `cos scan` to build your project's relationship graph.
+4. **Get Help**: Run `cos info` anytime for the full technical manual and command list.
+
+### 3. Core Commands
+- `cos ask "<request>"`: Resolve bugs or implement features in plain English.
+- `cos agent "<task>"`: Launch an autonomous agent for multi-step engineering.
+- `cos fix`: Automatically detect and repair compilation errors.
+- `cos visualize`: Open a browser-based architectural map of your project.
+
 ---
 
-## 📖 Quick Start Guide
-
-1. **Initialize**: Run `cos init` in your project root.
-2. **Configure**: Setup your AI provider with `cos config`.
-3. **Ask**: Use `cos ask "add a login form"` for direct changes.
-4. **Deploy Agent**: Use `cos agent "migrate this project to Tailwind"` for complex tasks.
-5. **Get Info**: Run `cos info` anytime for the full technical manual.
-
----
-
-## 👤 Developer
+## 👤 Owner
 **Dharantej Reddy Poduvu**
-- 📍 Location: India
 - 📧 Email: [dharan.poduvu@gmail.com](mailto:dharan.poduvu@gmail.com)
 - 🔗 GitHub: [@dharan1007](https://github.com/dharan1007)
 
 ---
 
 ## ⚠️ Legal Disclaimer
-**Codebase OS is provided "as is", without warranty of any kind.**
-The use of this software is at your **OWN RISK**. The developers are not responsible for any data loss, system damage, or unintended code changes caused by the operation of the AI agent. Always verify changes in a Git-controlled environment.
+**The use of this software is at your OWN RISK.** 
+Dharantej Reddy Poduvu is NOT responsible for any data loss, system corruption, or unintended code changes caused by the operation of the AI agent. **Always** use Codebase OS in a Git-controlled repository.
 
 ---
 
 ## 📄 License
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+Usage of this software is governed by the [LICENSE](LICENSE) file. All modifications and redistributions are prohibited.
