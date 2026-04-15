@@ -1,0 +1,49 @@
+name: code base
+version: 1.0.0
+rootDir: C:\Users\dhara\OneDrive\Desktop\codebase\codebase-os
+dataDir: .cos
+language: mixed
+layers:
+  database:
+    - database
+    - db
+    - migrations
+    - models
+  backend:
+    - src
+    - lib
+    - server
+    - backend
+    - api
+  api:
+    - api
+    - routes
+    - endpoints
+    - graphql
+  frontend:
+    - client
+    - frontend
+    - web
+    - ui
+    - views
+    - components
+exclude:
+  - node_modules
+  - dist
+  - build
+  - .git
+  - .cos
+  - __pycache__
+ai:
+  provider: openrouter
+  model: openai/gpt-5.4
+  temperature: 0.2
+  maxTokens: 4096
+environment:
+  autoResolvePortConflicts: true
+  autoResolveRuntimeVersions: true
+  dockerSocket: /var/run/docker.sock
+watch:
+  debounceMs: 500
+  autoAnalyze: true
+  autoApply: false

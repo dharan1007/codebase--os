@@ -1,0 +1,26 @@
+# Source code
+src/
+tsconfig.json
+.antigravity/
+
+# Environment and secrets
+.env
+.env.*
+
+# Logs and debug
+logs/
+*.log
+npm-debug.log*
+
+# Git
+.git/
+.gitignore
+.github/
+
+# Development assets
+scripts/
+tests/
+jest.config.js
+
+# Build artifacts are handled by preserving dist/
+node_modules/

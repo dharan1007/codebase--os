@@ -1,0 +1,69 @@
+{
+  "name": "codebase-os",
+  "version": "1.0.0",
+  "description": "Codebase Operating System — A foundational layer for intelligent software development",
+  "author": "Dharantej Reddy Poduvu <dharan.poduvu@gmail.com>",
+  "keywords": [
+    "ai",
+    "agent",
+    "automation",
+    "codebase",
+    "engineering"
+  ],
+  "main": "dist/cli/index.js",
+  "bin": {
+    "cos": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "dev": "ts-node --project tsconfig.json src/cli/index.ts",
+    "start": "node dist/cli/index.js",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test": "jest --passWithNoTests"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.20.9",
+    "@babel/parser": "^7.23.6",
+    "@babel/traverse": "^7.23.7",
+    "@babel/types": "^7.23.6",
+    "@google/generative-ai": "^0.24.1",
+    "better-sqlite3": "^9.4.3",
+    "chalk": "^4.1.2",
+    "chokidar": "^3.5.3",
+    "cli-table3": "^0.6.3",
+    "commander": "^11.1.0",
+    "dockerode": "^4.0.2",
+    "dotenv": "^16.3.1",
+    "fast-glob": "^3.3.2",
+    "inquirer": "^8.2.6",
+    "js-yaml": "^4.1.0",
+    "lodash": "^4.17.21",
+    "openai": "^4.24.1",
+    "ora": "^5.4.1",
+    "semver": "^7.5.4",
+    "tree-kill": "^1.2.2",
+    "ts-morph": "^21.0.1",
+    "uuid": "^9.0.1",
+    "which": "^3.0.1",
+    "winston": "^3.11.0",
+    "yaml": "^2.3.4",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/babel__traverse": "^7.20.5",
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/dockerode": "^3.3.23",
+    "@types/inquirer": "^8.2.10",
+    "@types/js-yaml": "^4.0.9",
+    "@types/lodash": "^4.14.202",
+    "@types/node": "^20.10.6",
+    "@types/semver": "^7.5.6",
+    "@types/uuid": "^9.0.7",
+    "@types/which": "^3.0.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
