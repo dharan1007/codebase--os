@@ -1,13 +1,21 @@
 import type { AIProvider, AICompletionRequest, AICompletionResponse, AIProviderKind } from '../../../types/index.js';
 import { logger } from '../../../utils/logger.js';
+import { RateLimiter } from '../../../utils/RateLimiter.js';
 
 export class OpenRouterProvider implements AIProvider {
     readonly kind: AIProviderKind = 'openrouter';
     private baseURL = 'https://openrouter.ai/api/v1';
     private defaultModel: string;
+    private limiter: RateLimiter;
 
     constructor(private apiKey: string, model = 'anthropic/claude-3.5-sonnet') {
         this.defaultModel = model;
+        // OpenRouter acts as a proxy, so we enforce a generous pooled limit
+        this.limiter = new RateLimiter({
+            maxConcurrency: 5,
+            requestsPerMinute: 60,
+            delayBetweenRequestsMs: 100
+        });
     }
 
     async complete(request: AICompletionRequest): Promise<AICompletionResponse> {
@@ -23,7 +31,8 @@ export class OpenRouterProvider implements AIProvider {
         stream: boolean, 
         onToken?: (token: string) => void
     ): Promise<AICompletionResponse> {
-        const model = request.model ?? this.defaultModel;
+        return this.limiter.execute(async () => {
+            const model = request.model ?? this.defaultModel;
 
         const body = {
             model,
@@ -109,8 +118,9 @@ export class OpenRouterProvider implements AIProvider {
             };
         } catch (err) {
             logger.error('OpenRouter completion failed', { error: String(err) });
-            throw new Error(`OpenRouter completion failed: ${String(err)}`);
+            throw err;
         }
+        });
     }
 
     async listModels(): Promise<string[]> {
