@@ -49,7 +49,7 @@ export class AIOrchestrator implements AIProvider {
         }
 
         let attempts = 0;
-        const maxAttempts = 15;
+        const maxAttempts = 2; // Hard cap on retries to completely prevent death loops
 
         // Pre-flight sleep to prevent burst rate limit collisions
         await new Promise(resolve => setTimeout(resolve, 800));
@@ -76,9 +76,14 @@ export class AIOrchestrator implements AIProvider {
 
                 // handle Rate Limits (429) & Server Overload (503/504)
                 if (errorMsg.includes('429') || errorMsg.includes('rate limit') || errorMsg.includes('503') || errorMsg.includes('504') || errorMsg.includes('overloaded') || errorMsg.includes('busy')) {
+                    // [ROOT CAUSE FIX]: Detect global upstream blocks and instantly sever the connection without looping.
+                    if (errorMsg.includes('upstream') || errorMsg.includes('temporarily rate-limited upstream')) {
+                        logger.error(`\n[FATAL OUTAGE] The provider is completely rejecting this model globally upstream, so it will never succeed.`);
+                        throw new Error(`The model you selected is dead or exhausted globally. Please run 'cos config' and switch to a different model.`);
+                    }
+
                     if (attempts < maxAttempts) {
-                        const waitTime = Math.min(Math.pow(1.6, attempts) * 3000, 90000); 
-                        if (attempts > 5) logger.error(`${this.kind.toUpperCase()} busy: ${error.message}`);
+                        const waitTime = Math.min(Math.pow(1.6, attempts) * 3000, 15000); // Max wait of 15s
                         logger.warn(`AI provider is processing or busy [Attempt ${attempts}/${maxAttempts}]. Holding for ${Math.round(waitTime/1000)}s...`);
                         await new Promise(resolve => setTimeout(resolve, waitTime));
                         continue;
