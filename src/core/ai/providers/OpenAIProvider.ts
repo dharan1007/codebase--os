@@ -1,11 +1,13 @@
 import OpenAI from 'openai';
 import type { AIProvider, AICompletionRequest, AICompletionResponse, AIProviderKind } from '../../../types/index.js';
 import { logger } from '../../../utils/logger.js';
+import { RateLimiter } from '../../../utils/RateLimiter.js';
 
 export class OpenAIProvider implements AIProvider {
     readonly kind: AIProviderKind = 'openai';
     private client: OpenAI;
     private defaultModel: string;
+    private limiter: RateLimiter;
 
     constructor(apiKey: string, model = 'gpt-4o') {
         this.client = new OpenAI({ 
@@ -13,10 +15,17 @@ export class OpenAIProvider implements AIProvider {
             timeout: 300000 // 5 minutes persistence
         });
         this.defaultModel = model;
+        
+        this.limiter = new RateLimiter({
+            maxConcurrency: 5,
+            requestsPerMinute: 100, // GPT-4o typically has high limits
+            delayBetweenRequestsMs: 100
+        });
     }
 
     async complete(request: AICompletionRequest): Promise<AICompletionResponse> {
-        const model = request.model ?? this.defaultModel;
+        return this.limiter.execute(async () => {
+            const model = request.model ?? this.defaultModel;
 
         try {
             const response = await this.client.chat.completions.create({
@@ -44,8 +53,9 @@ export class OpenAIProvider implements AIProvider {
             };
         } catch (err) {
             logger.error('OpenAI completion failed', { error: String(err) });
-            throw new Error(`OpenAI completion failed: ${String(err)}`);
+            throw err;
         }
+        });
     }
 
     async listModels(): Promise<string[]> {
