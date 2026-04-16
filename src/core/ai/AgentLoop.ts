@@ -5,7 +5,7 @@ import { execSync } from 'child_process';
 import path from 'path';
 
 export interface AgentAction {
-    tool: 'read_file' | 'write_file' | 'list_files' | 'run_shell' | 'search_code' | 'find_references' | 'pause_and_ask' | 'finish';
+    tool: 'read_file' | 'write_file' | 'list_files' | 'run_shell' | 'search_code' | 'find_references' | 'pause_and_ask' | 'spawn_sub_agent' | 'shadow_test' | 'finish';
     args: Record<string, string>;
     reasoning: string;
 }
@@ -74,7 +74,7 @@ export class AgentLoop {
     constructor(
         private provider: AIProvider,
         private rootDir: string,
-        db: Database,
+        private db: Database,
         private sessionId: string,
         private graph: RelationshipGraph,
         private store: GraphStore
@@ -382,6 +382,69 @@ Use this context to anticipate side effects in dependent modules.`;
                 case 'pause_and_ask':
                     // This is a special tool handled partly in the CLI layer via onStep
                     return { success: true, output: `User provided feedback: ${action.args['feedback'] ?? 'Handled'}` };
+
+                case 'spawn_sub_agent': {
+                    const task = action.args['task'] ?? '';
+                    const type = action.args['specialist_type'] ?? 'General';
+                    // Create an isolated sub-agent loop
+                    const subAgent = new AgentLoop(this.provider, this.rootDir, this.db, `${this.sessionId}-sub`, this.graph, this.store);
+                    try {
+                        const result = await subAgent.run(`[Sub-Task: ${type}]\n${task}`);
+                        return { 
+                            success: result.success, 
+                            output: `Sub-Agent completed.\nSummary: ${result.summary}\nFiles Edited: ${result.filesWritten.join(', ')}` 
+                        };
+                    } catch (e) {
+                        return { success: false, output: '', error: String(e) };
+                    }
+                }
+
+                case 'shadow_test': {
+                    const targetFile = action.args['file_path'] ?? '';
+                    const testInput = action.args['test_input_json'] ?? '{}';
+                    const expectedOutput = action.args['expected_output_json'] ?? '{}';
+                    
+                    const testsDir = path.join(this.rootDir, '.cos', 'shadow_tests');
+                    const fs = require('fs');
+                    if (!fs.existsSync(testsDir)) fs.mkdirSync(testsDir, { recursive: true });
+                    
+                    const testFileName = `shadow-${Date.now()}.test.mjs`;
+                    const testFilePath = path.join(testsDir, testFileName);
+                    
+                    // Native node runner assuming target file is parsable. We'll generate a lightweight raw execution script.
+                    const testContent = `
+import assert from 'assert';
+import * as Module from '../../${targetFile.replace('.ts', '.js')}';
+
+async function run() {
+    try {
+        const input = ${testInput};
+        const expected = ${expectedOutput};
+        const funcName = '${action.args['function_name'] ?? ''}';
+        
+        if (typeof Module[funcName] !== 'function') throw new Error('Function ' + funcName + ' not exported in ' + '${targetFile}');
+        
+        console.log('Running Shadow Test for:', funcName);
+        const result = await Module[funcName](...Object.values(input));
+        assert.deepStrictEqual(result, expected);
+        console.log('SHADOW_TEST_PASS');
+    } catch(e) {
+        console.error('SHADOW_TEST_FAIL');
+        console.error(e.message);
+        process.exit(1);
+    }
+}
+run();
+`;
+                    fs.writeFileSync(testFilePath, testContent, 'utf-8');
+                    
+                    // We recursively call run_shell to execute the generated test
+                    return await this.executeTool({
+                        tool: 'run_shell',
+                        args: { command: `node ${testFilePath}` },
+                        reasoning: 'Executing isolated logical shadow test'
+                    }, onStep, stepCount, tasklist);
+                }
 
                 case 'run_shell': {
                     const cmd = action.args['command'] ?? '';
