@@ -1,68 +1,59 @@
 import type { AITask, ImpactReport, GraphNode } from '../../types/index.js';
 
 export const PromptTemplates = {
-    systemCodeExecutor: (): string => `You are an expert software engineer tasked with making precise, minimal, production-quality code changes.
+    systemCodeExecutor: (): string => `You are a Senior Principal Engineer. You make precise, high-performance, and type-safe code changes.
 
-RULES:
-1. Output ONLY the complete updated file content — no markdown fences, no explanations, no commentary.
-2. Never add placeholder comments like "// TODO", "// implement later", or "// rest of code here".
-3. Maintain existing code style, indentation, and formatting patterns.
-4. Only change what is strictly necessary to fulfill the task.
-5. Preserve all existing functionality unless explicitly instructed to remove it.
-6. Never introduce new dependencies not already present in the file.
-7. The output must be valid, production-ready code that compiles without errors.`,
+ENGINEERING PRINCIPLES:
+1. REASONING: Before outputting code, briefly outline your technical approach in a "REASONING" block.
+2. PRECISION: Minimal diffs. Do not touch unrelated code.
+3. SAFETY: Ensure all imports are valid. Never introduce "any" types unless unavoidable.
+4. ATOMICITY: Keep changes focused on the specific task.
+5. STYLE: Strictly mirror the project's existing indentation and variable naming conventions.
 
-    systemImpactAnalyzer: (): string => `You are an expert software architect analyzing codebase changes.
-Your role is to determine exactly which files and components need to be updated when a change is made.
-Be precise, conservative, and only flag genuinely impacted components.
-Always respond with valid JSON.`,
+OUTPUT FORMAT:
+- First, a <REASONING> block explaining your logic.
+- Second, the complete file content.
+- Third, a <REFLECTION> block where you self-critique the change for potential side effects.`,
 
-    systemTaskDecomposer: (): string => `You are a senior software engineer decomposing code change requirements into structured tasks.
-Analyze the impact report and determine the exact set of atomic changes needed.
-Be specific, actionable, and conservative — only create tasks for changes that are truly necessary.
-Always respond with valid JSON.`,
+    systemImpactAnalyzer: (): string => `You are a Software Architect. Your role is to calculate the blast radius of a code change.
+Use the structural data provided to identify every component that could be affected by changes to types, schemas, or API contracts.
+Respond ONLY with valid JSON.`,
+
+    systemTaskDecomposer: (): string => `You are a Technical Lead. Break down the user request into atomic, sequenced engineering tasks.
+Order them by dependency (e.g., update Database before API).
+Each task should be surgical and actionable.
+Respond ONLY with valid JSON.`,
 
     codeUpdate: (task: AITask, fileContent: string): string => `
-TASK: ${task.description}
-KIND: ${task.kind}
-FILE: ${task.targetFile}
-
-CONTEXT:
+CONTEXTUAL INTELLIGENCE:
 ${task.context}
+
+ENGINEERING TASK:
+${task.description}
 
 CONSTRAINTS:
 ${task.constraints.map(c => `- ${c}`).join('\n')}
+- TARGET FILE: ${task.targetFile}
+- MAX TOKENS: Keep output efficient.
 
-EXPECTED OUTPUT:
-${task.expectedOutput}
-
-CURRENT FILE CONTENT:
+CURRENT CONTENT:
 ${fileContent}
 
-Output the complete updated file with minimal necessary changes.`,
+Think step-by-step. Provide the reasoning, the code, and a final reflection on safety.`,
 
     impactSummary: (report: ImpactReport): string => `
-Analyze this impact report and provide a concise, actionable summary for developers.
-
-Trigger change: ${report.triggerChange.filePath} (${report.triggerChange.changeType})
+Analyze this impact report. Identify the "Critical Path" of required updates.
+Trigger: ${report.triggerChange.filePath}
 Severity: ${report.severity}
-Scopes: ${report.scope.join(', ')}
-Affected layers: ${report.affectedLayers.join(', ')}
 
-Impacted nodes (top ${Math.min(report.impactedNodes.length, 10)}):
-${report.impactedNodes
-            .slice(0, 10)
-            .map(n => `- ${n.node.name} (${n.node.kind}, ${n.node.layer}): ${n.reason}`)
-            .join('\n')}
+Impact Map:
+${report.impactedNodes.slice(0, 15).map(n => `- [${n.severity}] ${n.node.name}: ${n.reason}`).join('\n')}
 
-Cross-layer issues:
-${report.crossLayerIssues.map(i => `- [${i.sourceLayer}→${i.targetLayer}] ${i.description}`).join('\n')}
-
-Provide a concise JSON object:
+Respond with JSON:
 {
-  "headline": "one-line summary",
-  "keyRisks": ["risk1", "risk2"],
-  "prioritizedActions": ["action1", "action2"],
+  "headline": "...",
+  "keyRisks": [...],
+  "prioritizedActions": [...],
   "estimatedEffort": "small|medium|large"
 }`,
 
@@ -72,24 +63,20 @@ Provide a concise JSON object:
         targetContent: string,
         reason: string
     ): string => `
-A change was made to: ${changedFile}
+A change in "${changedFile}" has potentially impacted "${targetNode.name}".
 
-The following component may need updates:
-- Name: ${targetNode.name}
-- Kind: ${targetNode.kind}
-- Layer: ${targetNode.layer}
-- File: ${targetNode.filePath}
-- Reason: ${reason}
+REASON FOR CHECK: ${reason}
+LAYER: ${targetNode.layer}
 
-Current content of ${targetNode.filePath}:
-${targetContent.slice(0, 4000)}
+COMPONENT SOURCE:
+${targetContent.slice(0, 5000)}
 
+Determine if this component requires a technical update to maintain system integrity.
 Respond with JSON:
 {
   "needsUpdate": boolean,
   "confidence": 0.0-1.0,
-  "changes": ["specific change 1", "specific change 2"],
-  "risks": ["risk1"],
-  "skipReason": "why no update needed if needsUpdate=false"
+  "changes": ["step 1", "step 2"],
+  "skipReason": "..."
 }`,
-};
+};

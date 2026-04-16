@@ -14,6 +14,7 @@ interface NodeRow {
     location_json: string | null;
     metadata_json: string;
     hash: string;
+    embedding: Buffer | null;
     created_at: number;
     updated_at: number;
 }
@@ -115,6 +116,47 @@ export class GraphStore {
         return rows.map(r => this.rowToNode(r));
     }
 
+    updateNodeEmbedding(id: string, embedding: number[]): void {
+        const buffer = Buffer.from(new Float32Array(embedding).buffer);
+        this.db.prepare('UPDATE graph_nodes SET embedding = ? WHERE id = ?').run(buffer, id);
+    }
+
+    searchNodesByEmbedding(queryEmbedding: number[], limit = 10): Array<{ node: GraphNode; similarity: number }> {
+        // Fetch all nodes with embeddings
+        const rows = this.db.prepare(
+            'SELECT id, embedding FROM graph_nodes WHERE embedding IS NOT NULL'
+        ).all() as Array<{ id: string; embedding: Buffer }>;
+
+        if (rows.length === 0) return [];
+
+        const scored = rows.map(row => {
+            const nodeEmbedding = Array.from(new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4));
+            const similarity = this.cosineSimilarity(queryEmbedding, nodeEmbedding);
+            return { id: row.id, similarity };
+        });
+
+        scored.sort((a, b) => b.similarity - a.similarity);
+        const top = scored.slice(0, limit);
+
+        return top.map(s => ({
+            node: this.getNodeById(s.id)!,
+            similarity: s.similarity
+        }));
+    }
+
+    private cosineSimilarity(v1: number[], v2: number[]): number {
+        let dotProduct = 0;
+        let mag1 = 0;
+        let mag2 = 0;
+        for (let i = 0; i < v1.length; i++) {
+            dotProduct += v1[i] * v2[i];
+            mag1 += v1[i] * v1[i];
+            mag2 += v2[i] * v2[i];
+        }
+        const mag = Math.sqrt(mag1) * Math.sqrt(mag2);
+        return mag === 0 ? 0 : dotProduct / mag;
+    }
+
     upsertEdge(edge: Omit<GraphEdge, 'id' | 'createdAt'> & { id?: string }): GraphEdge {
         const existing = this.db.prepare(
             'SELECT id FROM graph_edges WHERE source_id = ? AND target_id = ? AND kind = ?'
@@ -185,6 +227,7 @@ export class GraphStore {
             docComment: row.doc_comment ?? undefined,
             location: row.location_json ? JSON.parse(row.location_json) : undefined,
             metadata: JSON.parse(row.metadata_json),
+            embedding: row.embedding ? Array.from(new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4)) : undefined,
             hash: row.hash,
             createdAt: row.created_at,
             updatedAt: row.updated_at,

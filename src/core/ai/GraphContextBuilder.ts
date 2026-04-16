@@ -1,6 +1,9 @@
 import type { RelationshipGraph } from '../graph/RelationshipGraph.js';
 import type { GraphNode } from '../../types/index.js';
 import { GraphQueryEngine } from '../graph/GraphQueryEngine.js';
+import { GraphStore } from '../../storage/GraphStore.js';
+import type { AIProvider } from '../../types/index.js';
+import { logger } from '../../utils/logger.js';
 import path from 'path';
 import fs from 'fs';
 
@@ -9,6 +12,7 @@ export interface GraphContext {
     keyNodes: Array<{ name: string; kind: string; layer: string; file: string; connections: number }>;
     crossLayerWarnings: string[];
     cyclicDependencies: string[];
+    semanticSnippets: Array<{ node: GraphNode; similarity: number }>;
     summary: string;
 }
 
@@ -20,7 +24,7 @@ export interface GraphContext {
 export class GraphContextBuilder {
     private engine: GraphQueryEngine;
 
-    constructor(private graph: RelationshipGraph) {
+    constructor(private graph: RelationshipGraph, private store: GraphStore, private aiProvider?: AIProvider) {
         this.engine = new GraphQueryEngine(graph);
     }
 
@@ -28,8 +32,19 @@ export class GraphContextBuilder {
      * Build a rich context string for a given request and optional focus files.
      * This replaces a flat file listing with meaningful structural data.
      */
-    build(request: string, rootDir: string, focusFiles?: string[]): GraphContext {
+    async build(request: string, rootDir: string, focusFiles?: string[]): Promise<GraphContext> {
         const requestWords = this.extractKeywords(request);
+        
+        // 1. Semantic Search (Vector RAG)
+        let semanticSnippets: Array<{ node: GraphNode; similarity: number }> = [];
+        if (this.aiProvider?.embed) {
+            try {
+                const queryEmbedding = await this.aiProvider.embed(request);
+                semanticSnippets = this.store.searchNodesByEmbedding(queryEmbedding, 15);
+            } catch (err) {
+                logger.warn('Semantic context build failed', { error: String(err) });
+            }
+        }
 
         // 1. Find nodes most relevant to the request
         const relevantNodes = this.findRelevantNodes(requestWords, focusFiles);
@@ -72,7 +87,7 @@ export class GraphContextBuilder {
 
         const summary = this.buildSummary(relevantNodes, crossLayerWarnings, cyclicDependencies, rootDir);
 
-        return { relevantFiles, keyNodes, crossLayerWarnings, cyclicDependencies, summary };
+        return { relevantFiles, keyNodes, crossLayerWarnings, cyclicDependencies, semanticSnippets, summary };
     }
 
     /**
@@ -109,10 +124,10 @@ export class GraphContextBuilder {
             lines.push('');
         }
 
-        if (context.cyclicDependencies.length > 0) {
-            lines.push('Existing Cyclic Dependencies (be careful not to worsen):');
-            for (const c of context.cyclicDependencies) {
-                lines.push(`  ~ ${c}`);
+        if (context.semanticSnippets.length > 0) {
+            lines.push('Semantically Related Components (AI Match):');
+            for (const s of context.semanticSnippets.slice(0, 8)) {
+                lines.push(`  ≈ ${s.node.name} [match: ${(s.similarity * 100).toFixed(0)}%] — ${s.node.filePath}`);
             }
             lines.push('');
         }

@@ -8,7 +8,10 @@ export class AnthropicProvider implements AIProvider {
     private defaultModel: string;
 
     constructor(apiKey: string, model = 'claude-3-5-sonnet-20241022') {
-        this.client = new Anthropic({ apiKey });
+        this.client = new Anthropic({ 
+            apiKey,
+            timeout: 300000 // 5 minutes persistence
+        });
         this.defaultModel = model;
     }
 

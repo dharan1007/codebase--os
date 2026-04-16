@@ -15,10 +15,10 @@ export class AIOrchestrator implements AIProvider {
 
     async complete(request: AICompletionRequest): Promise<AICompletionResponse> {
         let attempts = 0;
-        const maxAttempts = 10; // High-resilience for strict free tiers
+        const maxAttempts = 15; // Increased patience for highly congested times
 
         // Pre-flight sleep to prevent burst rate limit collisions
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 800));
 
         while (attempts < maxAttempts) {
             try {
@@ -48,14 +48,17 @@ export class AIOrchestrator implements AIProvider {
                     errorMsg.includes('503') || errorMsg.includes('504') || errorMsg.includes('overloaded') || errorMsg.includes('busy')) {
                     
                     if (attempts < maxAttempts) {
-                        // Incremental backoff capped at 60s to survive full-minute quota resets
-                        const waitTime = Math.min(Math.pow(1.5, attempts) * 2000, 60000); 
+                        // Incremental backoff capped at 90s to survive long quota resets
+                        const waitTime = Math.min(Math.pow(1.6, attempts) * 3000, 90000); 
                         
-                        // User Request: Don't show scary error icons on the first few attempts
-                        if (attempts > 3) {
+                        // Silent Wait: Don't show scary error icons on the first few attempts
+                        // Mirrors Claude's 'Thinking...' persistence
+                        if (attempts > 5) {
                             logger.error(`${this.kind.toUpperCase()} busy: ${error.message}`);
                         }
-                        logger.warn(`AI provider is busy or overloaded [Attempt ${attempts}/${maxAttempts}]. Waiting ${Math.round(waitTime/1000)}s...`);
+                        
+                        const waitSecs = Math.round(waitTime/1000);
+                        logger.warn(`AI provider is processing or busy [Attempt ${attempts}/${maxAttempts}]. Holding for ${waitSecs}s...`);
                         await new Promise(resolve => setTimeout(resolve, waitTime));
                         continue;
                     }
@@ -136,5 +139,57 @@ export class AIOrchestrator implements AIProvider {
 
     async listModels(): Promise<string[]> {
         return typeof this.provider.listModels === 'function' ? await this.provider.listModels() : [];
+    }
+
+    async embed(text: string): Promise<number[]> {
+        if (!this.provider.embed) {
+            throw new Error(`Provider ${this.kind} does not support embeddings.`);
+        }
+        
+        let attempts = 0;
+        const maxAttempts = 5;
+
+        while (attempts < maxAttempts) {
+            try {
+                return await this.provider.embed(text);
+            } catch (err: any) {
+                attempts++;
+                const errorMsg = err.message.toLowerCase();
+                if (errorMsg.includes('429') || errorMsg.includes('rate limit')) {
+                    const waitTime = Math.pow(2, attempts) * 1000;
+                    logger.warn(`Embed rate limit hit. Waiting ${waitTime}ms...`);
+                    await new Promise(r => setTimeout(r, waitTime));
+                    continue;
+                }
+                throw err;
+            }
+        }
+        throw new Error('Embed request failed after multiple attempts.');
+    }
+
+    async batchEmbed(texts: string[]): Promise<number[][]> {
+        if (!this.provider.batchEmbed) {
+            throw new Error(`Provider ${this.kind} does not support batch embeddings.`);
+        }
+
+        let attempts = 0;
+        const maxAttempts = 5;
+
+        while (attempts < maxAttempts) {
+            try {
+                return await this.provider.batchEmbed(texts);
+            } catch (err: any) {
+                attempts++;
+                const errorMsg = err.message.toLowerCase();
+                if (errorMsg.includes('429') || errorMsg.includes('rate limit')) {
+                    const waitTime = Math.pow(2, attempts) * 1000;
+                    logger.warn(`Batch embed rate limit hit. Waiting ${waitTime}ms...`);
+                    await new Promise(r => setTimeout(r, waitTime));
+                    continue;
+                }
+                throw err;
+            }
+        }
+        throw new Error('Batch embed request failed after multiple attempts.');
     }
 }

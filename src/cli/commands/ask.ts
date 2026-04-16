@@ -38,13 +38,11 @@ export function askCommand(): Command {
             const ctx = await loadContext();
             if (!ctx) return;
 
-            const { config, history, sessionId } = ctx;
+            const { config, history, sessionId, graph, aiProvider, store } = ctx;
 
             let router;
-            let provider;
             try {
                 router = new ModelRouter(config);
-                provider = AIProviderFactory.create(config);
             } catch (err) {
                 console.log(chalk.red(`AI provider error: ${String(err)}`));
                 process.exit(1);
@@ -59,7 +57,7 @@ export function askCommand(): Command {
             // Step 1 — Plan using the fast planning model
             const spinnerPlan = ora('Analyzing request and building plan...').start();
             const planningProvider = router.getProviderForTask('planning');
-            const planner = new ConversationalPlanner(planningProvider, ctx.graph);
+            const planner = new ConversationalPlanner(planningProvider, graph, store);
 
             let plan;
             try {

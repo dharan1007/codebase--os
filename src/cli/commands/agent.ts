@@ -30,28 +30,19 @@ export function agentCommand(): Command {
             const ctx = await loadContext();
             if (!ctx) return;
 
-            const { config, db, sessionId } = ctx;
-
-            let provider;
-            try {
-                const modelRouter = new ModelRouter(config);
-                provider = modelRouter.getProviderForTask('code');
-            } catch (err) {
-                console.log(chalk.red(`AI provider error: ${String(err)}`));
-                process.exit(1);
-            }
+            const { config, db, sessionId, aiProvider, graph, store } = ctx;
 
             console.log('');
             console.log(chalk.bold('Codebase OS — Autonomous Agent'));
             console.log(chalk.gray('─'.repeat(40)));
             console.log(`  Task: ${chalk.cyan(actualTask)}`);
-            console.log(chalk.gray('  The agent will read your project, write code, and verify its work automatically.'));
+            console.log(chalk.gray('  The agent will use Hybrid Retrieval and Semantic RAG to reason autonomously.'));
             console.log('');
 
             const spinner = opts.showSteps ? null : ora('Agent is working...').start();
             let stepCount = 0;
 
-            const agent = new AgentLoop(provider, config.rootDir, db, sessionId);
+            const agent = new AgentLoop(aiProvider, config.rootDir, db, sessionId);
 
             const result = await agent.run(actualTask, (step, action, toolResult) => {
                 stepCount = step;

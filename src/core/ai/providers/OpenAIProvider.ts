@@ -8,7 +8,10 @@ export class OpenAIProvider implements AIProvider {
     private defaultModel: string;
 
     constructor(apiKey: string, model = 'gpt-4o') {
-        this.client = new OpenAI({ apiKey });
+        this.client = new OpenAI({ 
+            apiKey,
+            timeout: 300000 // 5 minutes persistence
+        });
         this.defaultModel = model;
     }
 

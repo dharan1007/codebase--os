@@ -24,6 +24,9 @@ export class OpenRouterProvider implements AIProvider {
         };
 
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes
+
             const response = await fetch(`${this.baseURL}/chat/completions`, {
                 method: 'POST',
                 headers: {
@@ -33,7 +36,10 @@ export class OpenRouterProvider implements AIProvider {
                     'X-Title': 'Codebase OS',
                 },
                 body: JSON.stringify(body),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 const text = await response.text();

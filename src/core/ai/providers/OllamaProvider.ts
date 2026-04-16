@@ -28,11 +28,17 @@ export class OllamaProvider implements AIProvider {
         };
 
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes for local AI
+
             const response = await fetch(`${this.baseURL}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`Ollama API error ${response.status}: ${await response.text()}`);

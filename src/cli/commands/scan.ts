@@ -13,8 +13,8 @@ export function scanCommand(): Command {
                 const ctx = await loadContext();
                 if (!ctx) return;
 
-                const { config, graph, db } = ctx;
-                const scanner = new ProjectScanner(config.rootDir, graph, config, db);
+                const { config, graph, db, aiProvider } = ctx;
+                const scanner = new ProjectScanner(config.rootDir, graph, config, db, aiProvider);
 
                 console.log(chalk.bold('Starting project scan...'));
                 const result = await scanner.scanProject(opts.force);

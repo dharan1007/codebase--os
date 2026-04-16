@@ -19,7 +19,8 @@ export interface PlanResult {
 export class ConversationalPlanner {
     constructor(
         private provider: AIProvider,
-        private graph?: RelationshipGraph
+        private graph?: RelationshipGraph,
+        private store?: any // Adding GraphStore if available
     ) {}
 
     async plan(request: string, rootDir: string, focusFile?: string): Promise<PlanResult> {
@@ -27,9 +28,9 @@ export class ConversationalPlanner {
         let graphContextBlock = '';
         let relevantFiles: string[] = [];
 
-        if (this.graph && this.graph.nodes.size > 0) {
-            const builder = new GraphContextBuilder(this.graph);
-            const ctx = builder.build(request, rootDir, focusFile ? [focusFile] : undefined);
+        if (this.graph && this.graph.nodes.size > 0 && this.store) {
+            const builder = new GraphContextBuilder(this.graph, this.store, this.provider);
+            const ctx = await builder.build(request, rootDir, focusFile ? [focusFile] : undefined);
             graphContextBlock = builder.format(ctx);
             relevantFiles = ctx.relevantFiles;
         } else {

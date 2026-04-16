@@ -85,6 +85,7 @@ export interface GraphNode {
     docComment?: string;
     location?: SourceLocation;
     metadata: Record<string, unknown>;
+    embedding?: number[];
     hash: string;
     createdAt: number;
     updatedAt: number;
@@ -177,6 +178,8 @@ export type AIProviderKind = 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 
 export interface AIProvider {
     kind: AIProviderKind;
     complete(request: AICompletionRequest): Promise<AICompletionResponse>;
+    embed?(text: string): Promise<number[]>;
+    batchEmbed?(texts: string[]): Promise<number[][]>;
     isAvailable(): Promise<boolean>;
     listModels?(): Promise<string[]>;
 }
@@ -186,6 +189,7 @@ export interface AICompletionRequest {
     userPrompt: string;
     temperature?: number;
     maxTokens?: number;
+    timeoutMs?: number;
     model?: string;
     responseFormat?: 'text' | 'json';
 }

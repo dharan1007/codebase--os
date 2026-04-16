@@ -13,6 +13,8 @@ import { logger } from '../../utils/logger.js';
 import { normalizePath, resolveNormalized } from '../../utils/paths.js';
 import ora from 'ora';
 import chalk from 'chalk';
+import type { AIProvider } from '../../types/index.js';
+import { RateLimiter } from '../../utils/RateLimiter.js';
 
 export interface ScanResult {
     totalFiles: number;
@@ -33,7 +35,8 @@ export class ProjectScanner {
         private rootDir: string,
         private graph: RelationshipGraph,
         private config: ProjectConfig,
-        db: Database
+        db: Database,
+        private aiProvider?: AIProvider
     ) {
         this.fileAnalyzer = new FileAnalyzer(rootDir, {
             database: config.layers.database,
@@ -230,6 +233,42 @@ export class ProjectScanner {
                 }
             }
         });
+
+        // --- NEW: Semantic Indexing (Vector Embeddings) ---
+        if (this.aiProvider?.batchEmbed) {
+            spinner.text = 'Generating semantic embeddings (Vector RAG)...';
+            const nodesToEmbed = Array.from(this.graph.nodes.values()).filter(n => 
+                n.kind !== 'package' && n.kind !== 'module'
+            );
+            
+            if (nodesToEmbed.length > 0) {
+                const total = nodesToEmbed.length;
+                let indexed = 0;
+                
+                // Prepare semantic descriptions for better retrieval
+                const texts = nodesToEmbed.map(n => {
+                    const relativePath = path.relative(this.rootDir, n.filePath);
+                    return `${n.kind} "${n.name}" in ${relativePath}\nSignature: ${n.signature || 'N/A'}\nDoc: ${n.docComment || 'N/A'}`;
+                });
+
+                try {
+                    // Use RateLimiter.withRetry for industrial-grade stability
+                    await RateLimiter.withRetry(async () => {
+                        const embeddings = await this.aiProvider!.batchEmbed!(texts);
+                        for (let i = 0; i < nodesToEmbed.length; i++) {
+                            this.graphStore.updateNodeEmbedding(nodesToEmbed[i].id, embeddings[i]);
+                            indexed++;
+                            if (indexed % 10 === 0) {
+                                spinner.text = `Indexing semantic nodes: ${indexed}/${total}`;
+                            }
+                        }
+                    }, 3);
+                } catch (err) {
+                    logger.warn('Semantic indexing partially failed or skipped due to rate limits', { error: String(err) });
+                    errors.push({ file: '(global)', error: `Semantic indexing error: ${String(err)}` });
+                }
+            }
+        }
 
         const elapsed = Date.now() - startTime;
         spinner.succeed(
