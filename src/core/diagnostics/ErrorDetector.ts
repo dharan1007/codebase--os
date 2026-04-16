@@ -129,7 +129,8 @@ export class ErrorDetector {
         const errors: Diagnostic[] = [];
         const warnings: Diagnostic[] = [];
 
-        for (const line of output.split('\n').filter(Boolean)) {
+        for (const rawLine of output.split('\n').filter(Boolean)) {
+            const line = rawLine.replace(/\r$/, '');
             const match = line.match(/^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.+)$/);
             if (match) {
                 const diag: Diagnostic = {
@@ -186,7 +187,8 @@ export class ErrorDetector {
                 }
             }
         } catch {
-            for (const line of output.split('\n').filter(Boolean)) {
+            for (const rawLine of output.split('\n').filter(Boolean)) {
+                const line = rawLine.replace(/\r$/, '');
                 warnings.push({
                     file: '',
                     line: 0,
