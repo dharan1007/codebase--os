@@ -105,63 +105,52 @@ export class TypeScriptAnalyzer {
     }
 
     findTypeUsages(typeName: string): Array<{ filePath: string; line: number; context: string }> {
+        // High-Performance Semantic Search via LanguageService
         const usages: Array<{ filePath: string; line: number; context: string }> = [];
+        const languageService = this.project.getLanguageService();
 
         for (const sf of this.project.getSourceFiles()) {
-            sf.forEachDescendant((node: any) => {
-                if (Node.isTypeReference(node)) {
-                    const refName = node.getTypeName().getText();
-                    if (refName === typeName) {
-                        const startLine = sf.getLineAndColumnAtPos(node.getStart()).line;
+            const nodes = sf.getDescendantsOfKind(SyntaxKind.Identifier)
+                .filter(id => id.getText() === typeName);
+
+            for (const node of nodes) {
+                const referencedSymbols = languageService.findReferences(node);
+                for (const refSymbol of referencedSymbols) {
+                    for (const ref of refSymbol.getReferences()) {
+                        const refSf = ref.getSourceFile();
+                        const { line } = refSf.getLineAndColumnAtPos(ref.getTextSpan().getStart());
                         usages.push({
-                            filePath: sf.getFilePath(),
-                            line: startLine,
-                            context: node.getParent()?.getText()?.slice(0, 100) ?? '',
+                            filePath: refSf.getFilePath(),
+                            line,
+                            context: refSymbol.getDefinition().getDeclarationNode()?.getText().slice(0, 100) || ''
                         });
                     }
                 }
-            });
+            }
         }
 
         return usages;
     }
 
     findAllReferences(symbolName: string): Array<{ filePath: string; line: number; context: string }> {
-        const references: Array<{ filePath: string; line: number; context: string }> = [];
-        
-        // Use a more robust search: Check each file's global declarations and identifiers
-        for (const sf of this.project.getSourceFiles()) {
-            sf.forEachDescendant(node => {
-                if (Node.isIdentifier(node) && node.getText() === symbolName) {
-                    // Filter for actual references (not just any text match)
-                    // Note: In a CLI tool, we balance precision with speed
-                    const startPos = node.getStart();
-                    const { line } = sf.getLineAndColumnAtPos(startPos);
-                    
-                    references.push({
-                        filePath: sf.getFilePath(),
-                        line,
-                        context: node.getParent()?.getText().slice(0, 100) ?? node.getText()
-                    });
-                }
-            });
-        }
-        
-        return references;
+        return this.findTypeUsages(symbolName);
     }
 
     schemaRename(oldName: string, newName: string): number {
-        let count = 0;
+        const languageService = this.project.getLanguageService();
+        let totalRenames = 0;
+
         for (const sf of this.project.getSourceFiles()) {
-            const identifiers = sf.getDescendantsOfKind(SyntaxKind.Identifier)
+            const nodes = sf.getDescendantsOfKind(SyntaxKind.Identifier)
                 .filter(id => id.getText() === oldName);
-            
-            for (const id of identifiers) {
-                id.replaceWithText(newName);
-                count++;
+
+            for (const node of nodes) {
+                // ts-morph node.rename handles cross-file renaming semantically
+                node.rename(newName);
+                totalRenames++;
             }
         }
-        return count;
+        return totalRenames;
     }
 
     detectTypeBreakingChanges(

@@ -42,19 +42,65 @@ export function agentCommand(): Command {
             const spinner = opts.showSteps ? null : ora('Agent is working...').start();
             let stepCount = 0;
 
-            const agent = new AgentLoop(aiProvider, config.rootDir, db, sessionId);
+            const agent = new AgentLoop(aiProvider, config.rootDir, db, sessionId, graph, store);
 
-            const result = await agent.run(actualTask, (step, action, toolResult) => {
+            const result = await agent.run(actualTask, async (step, action, toolResult, tasklist) => {
                 stepCount = step;
-                if (opts.showSteps) {
-                    const toolColor = action.tool === 'write_file' ? chalk.green : chalk.cyan;
-                    console.log(chalk.gray(`  Step ${step}:`), toolColor(`[${action.tool}]`), chalk.gray(action.args['path'] ?? action.args['command'] ?? action.args['dir'] ?? ''));
-                    console.log(chalk.gray(`    Reason: ${action.reasoning}`));
-                    if (!toolResult.success && toolResult.error) {
-                        console.log(chalk.yellow(`    Error: ${toolResult.error}`));
-                    }
-                } else {
-                    spinner?.start(`Agent working... (step ${step}: ${action.tool})`);
+                
+                // Dashboard Header
+                if (step === 1 && (action as any).tool !== 'thinking') {
+                    console.log(chalk.bold('\n🚀 Principal Execution Started'));
+                    console.log(chalk.gray('─'.repeat(40)));
+                }
+
+                // Handle Thought Streaming
+                if ((action as any).tool === 'thinking') {
+                    const token = (action.args as any).token;
+                    process.stdout.write(chalk.gray(token));
+                    return;
+                }
+
+                // Display Tasklist (if provided)
+                if (tasklist && tasklist.length > 0) {
+                    process.stdout.write('\x1Bc'); // Clear screen for dashboard feel
+                    console.log(chalk.bold('Codebase OS — Principal Dashboard'));
+                    console.log(chalk.gray('─'.repeat(40)));
+                    console.log(chalk.bold('📋 Tasklist:'));
+                    tasklist.forEach(t => {
+                        if (t.includes('(done)')) console.log(`  ${chalk.green('✔')} ${chalk.gray(t)}`);
+                        else if (t.includes('(in progress)')) console.log(`  ${chalk.yellow('➤')} ${chalk.bold(t)}`);
+                        else console.log(`  ${chalk.gray('○')} ${t}`);
+                    });
+                    console.log(chalk.gray('─'.repeat(40)));
+                }
+
+                const toolColor = action.tool === 'write_file' ? chalk.green : chalk.cyan;
+                console.log(chalk.gray(`\n[Step ${step}]`), toolColor(action.tool.toUpperCase()));
+                console.log(chalk.white(`  Reason: ${action.reasoning}`));
+
+                // Handle live streaming tool output (Async Spawn)
+                if ((toolResult as any).isStreaming) {
+                    process.stdout.write(chalk.gray(toolResult.output));
+                    return;
+                }
+
+                // Handle Interactive Guardrails (pause_and_ask)
+                if (action.tool === 'pause_and_ask') {
+                    console.log(chalk.yellow('\n⚠️  INTERVENTION REQUIRED'));
+                    const { feedback } = await inquirer.prompt([{
+                        type: 'input',
+                        name: 'feedback',
+                        message: action.args['feedback'] ?? 'The agent needs your approval/feedback to proceed:',
+                    }]);
+                    toolResult.output = `User feedback provided: ${feedback}`;
+                }
+
+                if (!toolResult.success && toolResult.error) {
+                    console.log(chalk.red(`  Result: FAILED — ${toolResult.error}`));
+                } else if (action.tool !== 'finish') {
+                    const argSummary = action.args['path'] ?? action.args['command'] ?? action.args['dir'] ?? '';
+                    if (argSummary) console.log(chalk.gray(`  Target: ${argSummary}`));
+                    console.log(chalk.green(`  Result: SUCCESS`));
                 }
             });
 

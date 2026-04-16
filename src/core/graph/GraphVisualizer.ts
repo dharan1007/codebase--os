@@ -32,12 +32,12 @@ export interface VisualizationData {
 }
 
 const LAYER_COLORS: Record<Layer, string> = {
-    database: '#ef4444',
-    backend: '#3b82f6',
-    api: '#a855f7',
-    frontend: '#10b981',
-    config: '#f59e0b',
-    infrastructure: '#06b6d4',
+    database: '#f43f5e',   // Rose
+    backend: '#0ea5e9',    // Cyan
+    api: '#10b981',        // Emerald
+    frontend: '#3b82f6',   // Blue
+    config: '#f59e0b',     // Amber
+    infrastructure: '#06b6d4', // Sky
 };
 
 const KIND_SIZE: Record<string, number> = {
@@ -134,67 +134,95 @@ export class GraphVisualizer {
 
     private buildHTMLPage(data: VisualizationData): string {
         const jsonContent = JSON.stringify(data);
+        const scriptStart = '<script>';
+        const scriptEnd = '</script>';
+        
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Codebase OS ✨ Relationship Graph</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
         :root {
-            --bg: #030712;
-            --card-bg: rgba(17, 24, 39, 0.7);
-            --border: rgba(255, 255, 255, 0.08);
-            --text: #f3f4f6;
-            --text-muted: #9ca3af;
-            --primary: #6366f1;
-            --secondary: #ec4899;
+            --bg: #020617;
+            --card-bg: rgba(15, 23, 42, 0.6);
+            --border: rgba(255, 255, 255, 0.05);
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #0ea5e9;
+            --accent: #10b981;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             background: var(--bg); 
             color: var(--text); 
-            font-family: 'Inter', sans-serif; 
+            font-family: 'Space Grotesk', sans-serif; 
             height: 100vh; 
             overflow: hidden;
             display: flex;
         }
 
         aside {
-            width: 320px;
+            width: 400px;
             background: var(--card-bg);
-            backdrop-filter: blur(12px);
+            backdrop-filter: blur(40px);
             border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
             z-index: 100;
+            box-shadow: 40px 0 80px rgba(0,0,0,0.8);
         }
 
-        .sidebar-header { padding: 24px; border-bottom: 1px solid var(--border); }
-        .brand { font-weight: 700; font-size: 1.25rem; color: var(--primary); margin-bottom: 16px; }
-        .search-box input {
-            width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border);
-            border-radius: 8px; padding: 10px 12px; color: var(--text); font-family: inherit;
-        }
-
-        .sidebar-content { flex: 1; overflow-y: auto; padding: 16px; }
-        .section-title { font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); margin: 20px 0 12px; font-weight: 600; }
+        .sidebar-header { padding: 40px 32px; border-bottom: 1px solid var(--border); }
+        .brand { font-weight: 700; font-size: 1.75rem; letter-spacing: -0.04em; background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 32px; font-family: 'JetBrains Mono', monospace; }
         
-        .node-list-item {
-            padding: 8px 12px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 0.85rem;
+        .search-box { position: relative; }
+        .search-box input {
+            width: 100%; background: rgba(0,0,0,0.4); border: 1px solid var(--border);
+            border-radius: 16px; padding: 14px 20px; color: var(--text); font-family: 'Space Grotesk', inherit;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            font-size: 0.95rem;
         }
-        .node-list-item:hover { background: rgba(255,255,255,0.05); }
-        .node-list-item .dot { width: 8px; height: 8px; border-radius: 50%; }
+        .search-box input:focus { outline: none; border-color: var(--primary); background: rgba(255,255,255,0.06); }
+
+        .sidebar-content { flex: 1; overflow-y: auto; padding: 24px; }
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 32px; }
+        .stat-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border); padding: 16px; border-radius: 12px; }
+        .stat-val { font-size: 1.25rem; font-weight: 700; color: var(--primary); }
+        .stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; margin-top: 4px; }
+
+        .node-list-item {
+            padding: 10px 14px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; gap: 12px; font-size: 0.9rem;
+            margin-bottom: 4px; border: 1px solid transparent; transition: all 0.2s;
+        }
+        .node-list-item:hover { background: rgba(255,255,255,0.05); border-color: var(--border); }
+        .node-list-item .dot { width: 10px; height: 10px; border-radius: 4px; box-shadow: 0 0 10px currentColor; }
 
         main { flex: 1; position: relative; }
-        canvas { width: 100%; height: 100%; cursor: grab; }
+        #graph { width: 100%; height: 100%; }
+
+        .node circle { cursor: grab; filter: drop-shadow(0 0 8px rgba(255,255,255,0.2)); stroke-width: 2px; }
+        .node.active circle { stroke: #fff; stroke-width: 3px; filter: drop-shadow(0 0 15px currentColor); }
+        
+        .link { stroke-opacity: 0.15; stroke-width: 1.5px; transition: stroke-opacity 0.2s; }
+        .link.active { stroke-opacity: 0.8; stroke-width: 2.5px; }
+
+        .label { font-size: 10px; fill: var(--text-muted); pointer-events: none; font-weight: 500; }
+        .node.active .label { fill: #fff; font-size: 12px; font-weight: 700; }
 
         #tooltip {
-            position: fixed; background: rgba(17, 24, 39, 0.95); border: 1px solid var(--border);
-            padding: 12px; border-radius: 8px; display: none; z-index: 1000; font-size: 0.8rem;
+            position: fixed; background: rgba(17, 24, 39, 0.9); backdrop-filter: blur(10px);
+            border: 1px solid var(--border); padding: 16px; border-radius: 12px; 
+            display: none; z-index: 1000; font-size: 0.85rem; pointer-events: none;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
         }
+        .tt-kind { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; background: rgba(255,255,255,0.1); margin-bottom: 8px; }
+        .tt-name { font-weight: 700; font-size: 1.1rem; margin-bottom: 4px; }
+        .tt-path { color: var(--text-muted); font-family: monospace; font-size: 0.75rem; }
     </style>
 </head>
 <body>
@@ -203,100 +231,167 @@ export class GraphVisualizer {
             <div class="brand">Codebase OS</div>
             <div class="search-box"><input type="text" id="node-search" placeholder="Search components..."></div>
         </div>
-        <div class="sidebar-content" id="node-results"></div>
+        <div class="sidebar-content">
+            <div class="stats-grid">
+                <div class="stat-card"><div class="stat-val" id="count-nodes">-</div><div class="stat-label">Nodes</div></div>
+                <div class="stat-card"><div class="stat-val" id="count-edges">-</div><div class="stat-label">Links</div></div>
+            </div>
+            <div id="node-results"></div>
+        </div>
     </aside>
     <main>
-        <canvas id="graph-canvas"></canvas>
+        <svg id="graph"></svg>
         <div id="tooltip"></div>
     </main>
 
-    <script>
-        const DATA = ${jsonContent};
-        const COLORS = {
-            infrastructure: '#06b6d4', database: '#ef4444', backend: '#3b82f6',
-            api: '#a855f7', frontend: '#10b981', config: '#f59e0b'
-        };
+    ${scriptStart}
+        const data = ${jsonContent};
+        const width = window.innerWidth - 400;
+        const height = window.innerHeight;
 
-        const canvas = document.getElementById('graph-canvas');
-        const ctx = canvas.getContext('2d');
-        const searchInput = document.getElementById('node-search');
-        
-        let width, height, nodes = [], edges = [], scale = 1, offsetX = 0, offsetY = 0;
-        let isDragging = false, lastMouse = {x:0, y:0}, hoveredNode = null;
+        document.getElementById('count-nodes').textContent = data.nodes.length;
+        document.getElementById('count-edges').textContent = data.edges.length;
 
-        function init() {
-            width = canvas.width = canvas.clientWidth;
-            height = canvas.height = canvas.clientHeight;
-            nodes = DATA.nodes.map(n => ({...n, x: (Math.random()-0.5)*width, y: (Math.random()-0.5)*height, vx:0, vy:0}));
-            edges = DATA.edges;
-            updateSidebar();
-            animate();
+        const svg = d3.select("#graph")
+            .attr("viewBox", [0, 0, width, height]);
+
+        const g = svg.append("g");
+
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 8])
+            .on("zoom", (event) => g.attr("transform", event.transform));
+
+        svg.call(zoom);
+
+        const simulation = d3.forceSimulation(data.nodes)
+            .force("link", d3.forceLink(data.edges).id(d => d.id).distance(120))
+            .force("charge", d3.forceManyBody().strength(-400))
+            .force("center", d3.forceCenter(width / 2, height / 2))
+            .force("x", d3.forceX(width / 2).strength(0.05))
+            .force("y", d3.forceY(height / 2).strength(0.05));
+
+        const link = g.append("g")
+            .attr("stroke", "#94a3b8")
+            .selectAll("line")
+            .data(data.edges)
+            .join("line")
+            .attr("class", "link");
+
+        const node = g.append("g")
+            .selectAll("g")
+            .data(data.nodes)
+            .join("g")
+            .attr("class", "node")
+            .call(drag(simulation));
+
+        node.append("circle")
+            .attr("r", d => d.size * 1.5)
+            .attr("fill", d => d.color)
+            .attr("stroke", d => d.color)
+            .attr("stroke-opacity", 0.3);
+
+        node.append("text")
+            .attr("class", "label")
+            .attr("x", d => d.size * 1.5 + 8)
+            .attr("y", 3)
+            .text(d => d.label);
+
+        node.on("mouseenter", (event, d) => {
+            showTooltip(event, d);
+            highlightConnections(d);
+        });
+
+        node.on("mouseleave", () => {
+            hideTooltip();
+            resetHighlight();
+        });
+
+        simulation.on("tick", () => {
+            link
+                .attr("x1", d => d.source.x)
+                .attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x)
+                .attr("y2", d => d.target.y);
+
+            node
+                .attr("transform", d => "translate(" + d.x + "," + d.y + ")");
+        });
+
+        function drag(simulation) {
+            return d3.drag()
+                .on("start", (event) => {
+                    if (!event.active) simulation.alphaTarget(0.3).restart();
+                    event.subject.fx = event.subject.x;
+                    event.subject.fy = event.subject.y;
+                })
+                .on("drag", (event) => {
+                    event.subject.fx = event.x;
+                    event.subject.fy = event.y;
+                })
+                .on("end", (event) => {
+                    if (!event.active) simulation.alphaTarget(0);
+                    event.subject.fx = null;
+                    event.subject.fy = null;
+                });
         }
 
-        function updateSidebar() {
-            const list = document.getElementById('node-results');
+        const tooltip = d3.select("#tooltip");
+        function showTooltip(event, d) {
+            tooltip.style("display", "block")
+                .html('<div class="tt-kind" style="background:'+d.color+'">'+d.kind+'</div>' +
+                      '<div class="tt-name">'+d.label+'</div>' +
+                      '<div class="tt-path">'+d.filePath+'</div>')
+                .style("left", (event.clientX + 20) + "px")
+                .style("top", (event.clientY - 20) + "px");
+        }
+
+        function hideTooltip() { tooltip.style("display", "none"); }
+
+        function highlightConnections(d) {
+            link.attr("class", l => (l.source.id === d.id || l.target.id === d.id) ? "link active" : "link");
+            node.attr("class", n => {
+                const isNeighbor = data.edges.some(l => 
+                    (l.source.id === d.id && l.target.id === n.id) || 
+                    (l.target.id === d.id && l.source.id === n.id)
+                );
+                return (n.id === d.id || isNeighbor) ? "node active" : "node";
+            });
+        }
+
+        function resetHighlight() {
+            link.attr("class", "link");
+            node.attr("class", "node");
+        }
+
+        // Search functionality
+        const searchInput = document.getElementById('node-search');
+        const resultsList = document.getElementById('node-results');
+
+        function updateList() {
             const query = searchInput.value.toLowerCase();
-            const filtered = nodes.filter(n => n.label.toLowerCase().includes(query)).slice(0, 50);
-            list.innerHTML = filtered.map(n => 
-                '<div class="node-list-item">' +
-                '<div class="dot" style="background:' + (COLORS[n.layer] || '#999') + '"></div>' +
-                '<span>' + n.label + '</span>' +
+            const filtered = data.nodes.filter(n => n.label.toLowerCase().includes(query)).slice(0, 50);
+            
+            resultsList.innerHTML = filtered.map(n => 
+                '<div class="node-list-item" onclick="focusNode(\\'' + n.id + '\\')">' +
+                    '<div class="dot" style="background:' + n.color + '"></div>' +
+                    '<span>' + n.label + '</span>' +
                 '</div>'
             ).join('');
         }
 
-        function animate() {
-            updatePhysics();
-            draw();
-            requestAnimationFrame(animate);
-        }
+        window.focusNode = (id) => {
+            const n = data.nodes.find(d => d.id === id);
+            if (!n) return;
+            svg.transition().duration(750).call(
+                zoom.transform,
+                d3.zoomIdentity.translate(width / 2, height / 2).scale(2).translate(-n.x, -n.y)
+            );
+            highlightConnections(n);
+        };
 
-        function updatePhysics() {
-            nodes.forEach(n => {
-                n.vx -= n.x * 0.001;
-                n.vy -= n.y * 0.001;
-                n.x += n.vx; n.y += n.vy;
-                n.vx *= 0.9; n.vy *= 0.9;
-            });
-            edges.forEach(e => {
-                const a = nodes.find(n => n.id === e.source), b = nodes.find(n => n.id === e.target);
-                if (!a || !b) return;
-                const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx*dx+dy*dy);
-                const f = (d - 100) * 0.01;
-                a.vx += (dx/d)*f; a.vy += (dy/d)*f; b.vx -= (dx/d)*f; b.vy -= (dy/d)*f;
-            });
-        }
-
-        function draw() {
-            ctx.clearRect(0, 0, width, height);
-            ctx.save();
-            ctx.translate(width/2 + offsetX, height/2 + offsetY);
-            ctx.scale(scale, scale);
-            ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-            edges.forEach(e => {
-                const a = nodes.find(n => n.id === e.source), b = nodes.find(n => n.id === e.target);
-                if (!a || !b) return;
-                ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-            });
-            nodes.forEach(n => {
-                ctx.fillStyle = COLORS[n.layer] || '#999';
-                ctx.beginPath(); ctx.arc(n.x, n.y, n.size || 5, 0, Math.PI*2); ctx.fill();
-            });
-            ctx.restore();
-        }
-
-        canvas.addEventListener('mousedown', e => { isDragging = true; lastMouse = {x:e.clientX, y:e.clientY}; });
-        window.addEventListener('mousemove', e => {
-            if (isDragging) {
-                offsetX += e.clientX - lastMouse.x; offsetY += e.clientY - lastMouse.y;
-                lastMouse = {x:e.clientX, y:e.clientY};
-            }
-        });
-        window.addEventListener('mouseup', () => isDragging = false);
-        canvas.addEventListener('wheel', e => { scale *= (e.deltaY > 0 ? 0.9 : 1.1); e.preventDefault(); }, {passive:false});
-        searchInput.addEventListener('input', updateSidebar);
-        init();
-    </script>
+        searchInput.addEventListener('input', updateList);
+        updateList();
+    ${scriptEnd}
 </body>
 </html>`;
     }

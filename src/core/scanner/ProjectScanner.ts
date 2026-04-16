@@ -73,16 +73,38 @@ export class ProjectScanner {
 
         const fileAnalyses = new Map<string, FileAnalysis>();
 
-        for (const filePath of files) {
-            try {
-                const analysis = this.fileAnalyzer.analyze(filePath);
-                fileAnalyses.set(filePath, analysis);
-                errors.push(...analysis.errors.map(e => ({ file: filePath, error: e })));
-                analyzedFiles++;
-                spinner.text = `Analyzing ${chalk.cyan(path.relative(this.rootDir, filePath))}`;
-            } catch (err) {
-                errors.push({ file: filePath, error: String(err) });
-            }
+        // SUPREMACY UPGRADE: Parallel Incremental Analysis
+        spinner.text = `Analyzing files using parallel incremental scan...`;
+        
+        const CONCURRENCY = 8; // Parallel workers
+        const chunks: string[][] = [];
+        for (let i = 0; i < files.length; i += CONCURRENCY) {
+            chunks.push(files.slice(i, i + CONCURRENCY));
+        }
+
+        for (const chunk of chunks) {
+            await Promise.all(chunk.map(async (filePath) => {
+                try {
+                    // Incremental Check: Check if hash exists and hasn't changed
+                    const content = fs.readFileSync(filePath, 'utf8');
+                    const currentHash = contentHash(content);
+                    
+                    if (incremental) {
+                        const existing = this.db.prepare('SELECT hash FROM file_analyses WHERE file_path = ?').get(filePath) as { hash: string } | undefined;
+                        if (existing && existing.hash === currentHash) {
+                            return; // Skip analysis
+                        }
+                    }
+
+                    const analysis = this.fileAnalyzer.analyze(filePath);
+                    fileAnalyses.set(filePath, analysis);
+                    errors.push(...analysis.errors.map(e => ({ file: filePath, error: e })));
+                    analyzedFiles++;
+                    spinner.text = `Analyzing [Parallel]: ${path.relative(this.rootDir, filePath)}`;
+                } catch (err) {
+                    errors.push({ file: filePath, error: String(err) });
+                }
+            }));
         }
 
         spinner.text = 'Building relationship graph...';

@@ -11,6 +11,18 @@ export class OpenRouterProvider implements AIProvider {
     }
 
     async complete(request: AICompletionRequest): Promise<AICompletionResponse> {
+        return this.internalComplete(request, false);
+    }
+
+    async completeStream(request: AICompletionRequest, onToken: (token: string) => void): Promise<AICompletionResponse> {
+        return this.internalComplete(request, true, onToken);
+    }
+
+    private async internalComplete(
+        request: AICompletionRequest, 
+        stream: boolean, 
+        onToken?: (token: string) => void
+    ): Promise<AICompletionResponse> {
         const model = request.model ?? this.defaultModel;
 
         const body = {
@@ -21,11 +33,12 @@ export class OpenRouterProvider implements AIProvider {
             ],
             temperature: request.temperature ?? 0.2,
             max_tokens: request.maxTokens ?? 4096,
+            stream
         };
 
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes
+            const timeoutId = setTimeout(() => controller.abort(), 300000);
 
             const response = await fetch(`${this.baseURL}/chat/completions`, {
                 method: 'POST',
@@ -46,12 +59,45 @@ export class OpenRouterProvider implements AIProvider {
                 throw new Error(`OpenRouter API error ${response.status}: ${text}`);
             }
 
-            const data = await response.json() as {
-                choices: Array<{ message: { content: string } }>;
-                model: string;
-                usage?: { prompt_tokens: number; completion_tokens: number };
-            };
+            if (stream && response.body) {
+                let fullContent = '';
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const dataStr = line.slice(6).trim();
+                            if (dataStr === '[DONE]') break;
+                            try {
+                                const data = JSON.parse(dataStr);
+                                const token = data.choices[0]?.delta?.content ?? '';
+                                if (token) {
+                                    fullContent += token;
+                                    onToken?.(token);
+                                }
+                            } catch {
+                                // Skip malformed chunks
+                            }
+                        }
+                    }
+                }
 
+                return {
+                    content: fullContent,
+                    model,
+                    usage: { inputTokens: 0, outputTokens: 0 }, // Usage often not sent in stream until end
+                    provider: this.kind,
+                };
+            }
+
+            const data = await response.json() as any;
             return {
                 content: data.choices[0]?.message?.content ?? '',
                 model: data.model ?? model,

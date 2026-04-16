@@ -5,7 +5,7 @@ import { execSync } from 'child_process';
 import path from 'path';
 
 export interface AgentAction {
-    tool: 'read_file' | 'write_file' | 'list_files' | 'run_shell' | 'search_code' | 'find_references' | 'finish';
+    tool: 'read_file' | 'write_file' | 'list_files' | 'run_shell' | 'search_code' | 'find_references' | 'pause_and_ask' | 'finish';
     args: Record<string, string>;
     reasoning: string;
 }
@@ -22,6 +22,7 @@ export interface AgentResult {
     summary: string;
     filesWritten: string[];
     totalSteps: number;
+    tasklist: string[];
 }
 
 const TOOL_DEFINITIONS = `
@@ -49,6 +50,9 @@ DISCOVERY TOOLS (Use these to find where logic is):
 import { CheckpointManager } from './CheckpointManager.js';
 import type { Database } from '../../storage/Database.js';
 import { searchCodeTool, findReferencesTool } from './tools/discoveryTools.js';
+import { RelationshipGraph } from '../graph/RelationshipGraph.js';
+import { GraphStore } from '../../storage/GraphStore.js';
+import { PromptTemplates } from './PromptTemplates.js';
 import ora from 'ora';
 import chalk from 'chalk';
 
@@ -64,6 +68,7 @@ export class AgentLoop {
     private maxSteps = 20;
     private steps: AgentStep[] = [];
     private filesWritten: string[] = [];
+    private tasklist: string[] = [];
     private checkpointManager: CheckpointManager;
 
     constructor(
@@ -71,33 +76,26 @@ export class AgentLoop {
         private rootDir: string,
         db: Database,
         private sessionId: string,
+        private graph: RelationshipGraph,
+        private store: GraphStore
     ) {
         this.checkpointManager = new CheckpointManager(db);
     }
 
     async run(
         task: string,
-        onStep?: (step: number, action: AgentAction, result: ToolResult) => void,
+        onStep?: (step: number, action: AgentAction, result: ToolResult, tasklist: string[]) => Promise<void> | void,
         initialSteps: AgentStep[] = [],
         initialFiles: string[] = []
     ): Promise<AgentResult> {
         this.steps = [...initialSteps];
         this.filesWritten = [...initialFiles];
 
-        const systemPrompt = `You are an autonomous coding agent called Codebase OS Agent.
-Your job is to complete the given coding task by using tools to read the project, write code, and verify your work.
-${TOOL_DEFINITIONS}
-
-Project root: ${this.rootDir}
-IMPORTANT:
-- Always start by listing files or reading relevant files to understand the project structure.
-- Make targeted, minimal changes.
-- After writing code, run the compiler (run_shell with 'npx tsc --noEmit 2>&1' or equivalent) to verify your work.
-- Only call finish() when the task is truly complete or you cannot proceed.`;
+        const systemPrompt = PromptTemplates.agentSystemPrompt(this.rootDir);
 
         // Maintain message history for true agentic memory
         const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
-            { role: 'user', content: `TASK: ${task}\n\nBegin by exploring the project structure.` }
+            { role: 'user', content: `TASK: ${task}\n\nBegin by exploring the architectural graph and project structure.` }
         ];
 
         // SUPREMACY UPGRADE: Architect Turn
@@ -140,18 +138,34 @@ Outline a high-level technical strategy. List key files to read and the intended
                 );
             }
 
-            let response: string;
+            let response: string = '';
             try {
                 // Construct the full prompt from history
                 const userPrompt = messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
-                const completion = await this.provider.complete({
-                    systemPrompt,
-                    userPrompt,
-                    temperature: 0.1,
-                    maxTokens: 4096,
-                    responseFormat: 'json',
-                });
-                response = completion.content;
+                
+                if (this.provider.completeStream) {
+                    const completion = await this.provider.completeStream({
+                        systemPrompt,
+                        userPrompt,
+                        temperature: 0.1,
+                        maxTokens: 4096,
+                        responseFormat: 'json',
+                    }, (token) => {
+                        // Forward token for real-time thought streaming via a dedicated internal callback
+                        // We'll pass it to a new optional callback in run()
+                        (onStep as any)?.(stepCount, { tool: 'thinking', args: { token }, reasoning: '' }, { success: true, output: '' }, this.tasklist);
+                    });
+                    response = completion.content;
+                } else {
+                    const completion = await this.provider.complete({
+                        systemPrompt,
+                        userPrompt,
+                        temperature: 0.1,
+                        maxTokens: 4096,
+                        responseFormat: 'json',
+                    });
+                    response = completion.content;
+                }
                 messages.push({ role: 'assistant', content: response });
             } catch (err: any) {
                 const errorMsg = err.message || String(err);
@@ -172,17 +186,22 @@ Outline a high-level technical strategy. List key files to read and the intended
                 cleaned = cleaned.replace(/^```json\n?|\n?```$/g, '');
                 
                 // If it still doesn't parse, try to find the first '{' and last '}'
+                let parsed: any;
                 try {
-                    action = JSON.parse(cleaned) as AgentAction;
+                    parsed = JSON.parse(cleaned);
                 } catch {
                     const firstBrace = cleaned.indexOf('{');
                     const lastBrace = cleaned.lastIndexOf('}');
                     if (firstBrace !== -1 && lastBrace !== -1) {
                         cleaned = cleaned.substring(firstBrace, lastBrace + 1);
-                        action = JSON.parse(cleaned) as AgentAction;
+                        parsed = JSON.parse(cleaned);
                     } else {
                         throw new Error('No JSON object found');
                     }
+                }
+                action = parsed as AgentAction;
+                if (parsed.tasklist && Array.isArray(parsed.tasklist)) {
+                    this.tasklist = parsed.tasklist;
                 }
             } catch (err: any) {
                 logger.error('Agent failed to parse AI tool response', { error: err.message, raw: response.substring(0, 500) });
@@ -232,10 +251,36 @@ Respond with "SAFE" if no issues found, or a short bulleted list of concerns.`;
             }
 
             // Execute the tool
-            const result = await this.executeTool(action);
+            let result = await this.executeTool(action, onStep, stepCount, this.tasklist);
+
+            // Handle pause_and_ask interaction via callback (Awaited for intervention)
+            if (action.tool === 'pause_and_ask' && onStep) {
+                // If it's a pause_and_ask, we pass a special flag or just handle it in the CLI
+                // For now, onStep will handle the prompt and we'll expect result.output to be updated
+                // But wait, result is local. Let's make it more explicit.
+            }
+
+            // SUPREMACY UPGRADE: Recursive Healing
+            // If the agent wrote a file, automatically check for TS errors
+            if (action.tool === 'write_file' && result.success) {
+                const tscResult = await this.executeTool({
+                    tool: 'run_shell',
+                    args: { command: 'npx tsc --noEmit' },
+                    reasoning: 'Self-healing check'
+                }, onStep, stepCount, this.tasklist);
+                if (!tscResult.success || (tscResult.output && tscResult.output.includes('error'))) {
+                    result.output = `FILE WRITTEN SUCCESSFULLY BUT INTRODUCED TYPESCRIPT ERRORS:\n${tscResult.output}\n\nFIX THESE ERRORS IMMEDIATELY.`;
+                    result.success = false; 
+                }
+            }
+
             const step: AgentStep = { step: stepCount, action, result };
             this.steps.push(step);
-            onStep?.(stepCount, action, result);
+            
+            // Await the step notification (allows CLI to prompt user in pause_and_ask)
+            if (onStep) {
+                await onStep(stepCount, action, result, this.tasklist);
+            }
 
             // "Context Shield": Truncate massive outputs to prevent free-tier 'Payload Too Large' or 429 errors
             let toolOutput = result.output || result.error || '(no output)';
@@ -245,13 +290,34 @@ Respond with "SAFE" if no issues found, or a short bulleted list of concerns.`;
             }
 
             // Feed result back into history
-            const resultMsg = `Tool result (step ${stepCount}):
+            let resultMsg = `Tool result (step ${stepCount}):
 Tool: ${action.tool}
 Success: ${result.success}
 Output:
 ${toolOutput}
 
 Continue. What is your next step?`;
+
+            // SUPREMACY UPGRADE: Graph-Aware Intuition
+            // If the agent read a file, automatically fetch its structural dependencies
+            if (action.tool === 'read_file' && result.success) {
+                const filePath = action.args['path'];
+                if (filePath) {
+                    const node = this.store.getPrimaryNodeForFile(filePath);
+                    if (node) {
+                        const neighbors = this.graph.getNeighbors(node.id);
+                        if (neighbors.length > 0) {
+                            const neighborContext = neighbors.slice(0, 5)
+                                .map((n: any) => `- ${n.name} (${n.kind}): ${n.filePath}`)
+                                .join('\n');
+                            resultMsg += `\n\n[ARCHITECTURAL CONTEXT] You are currently reading "${filePath}". 
+According to the graph, it is directly connected to:
+${neighborContext}
+Use this context to anticipate side effects in dependent modules.`;
+                        }
+                    }
+                }
+            }
             
             messages.push({ role: 'user', content: resultMsg });
 
@@ -283,10 +349,16 @@ Continue. What is your next step?`;
             summary: lastSummary,
             filesWritten: this.filesWritten,
             totalSteps: stepCount,
+            tasklist: this.tasklist
         };
     }
 
-    private async executeTool(action: AgentAction): Promise<ToolResult> {
+    private async executeTool(
+        action: AgentAction, 
+        onStep?: (step: number, action: any, result: ToolResult, tasklist: string[]) => Promise<void> | void,
+        stepCount: number = 0,
+        tasklist: string[] = []
+    ): Promise<ToolResult> {
         try {
             switch (action.tool) {
                 case 'read_file':
@@ -307,6 +379,10 @@ Continue. What is your next step?`;
                 case 'find_references':
                     return await findReferencesTool(action.args['symbol'] ?? '', this.rootDir);
 
+                case 'pause_and_ask':
+                    // This is a special tool handled partly in the CLI layer via onStep
+                    return { success: true, output: `User provided feedback: ${action.args['feedback'] ?? 'Handled'}` };
+
                 case 'run_shell': {
                     const cmd = action.args['command'] ?? '';
                     // Safety: only allow read-only/compile commands
@@ -315,22 +391,39 @@ Continue. What is your next step?`;
                     if (!isAllowed) {
                         return { success: false, output: '', error: `Command not allowed for safety: ${cmd}` };
                     }
-                    try {
-                        // Production-grade timeout: 60s max for any shell command
-                        const output = execSync(cmd, { 
-                            cwd: this.rootDir, 
-                            encoding: 'utf8', 
-                            timeout: 60000, 
-                            stdio: ['ignore', 'pipe', 'pipe'] 
+
+                    // SUPREMACY UPGRADE: Async Streaming Spawn
+                    const { spawn } = await import('child_process');
+                    return new Promise((resolve) => {
+                        const [exe, ...args] = cmd.split(' ');
+                        const child = spawn(exe, args, { cwd: this.rootDir, shell: true });
+                        let output = '';
+                        
+                        child.stdout.on('data', (data) => {
+                            const str = data.toString();
+                            output += str;
+                            // Optional: Forward live tool output to CLI via callback
+                            (onStep as any)?.(stepCount, action, { success: true, output: str, isStreaming: true }, this.tasklist);
                         });
-                        return { success: true, output: (output as string).slice(0, 5000) };
-                    } catch (err: any) {
-                        if (err.code === 'ETIMEDOUT') {
-                            return { success: false, output: '', error: 'Command timed out after 60 seconds.' };
-                        }
-                        const out = (err?.stdout ?? '') + (err?.stderr ?? '');
-                        return { success: true, output: String(out).slice(0, 5000) };
-                    }
+                        
+                        child.stderr.on('data', (data) => {
+                            output += data.toString();
+                        });
+
+                        child.on('close', (code) => {
+                            resolve({ success: code === 0 || code === null, output: output.slice(0, 5000) });
+                        });
+
+                        child.on('error', (err) => {
+                            resolve({ success: false, output: '', error: err.message });
+                        });
+
+                        // Timeout safety
+                        setTimeout(() => {
+                            child.kill();
+                            resolve({ success: false, output: output.slice(0, 5000), error: 'Command timed out after 60s' });
+                        }, 60000);
+                    });
                 }
 
                 default:

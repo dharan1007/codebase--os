@@ -117,6 +117,21 @@ export class RelationshipGraph implements IRelationshipGraph {
         return Array.from(sourceIds).map(id => this.nodes.get(id)).filter(Boolean) as GraphNode[];
     }
 
+    getNeighbors(nodeId: string): GraphNode[] {
+        const deps = this.getDirectDependencies(nodeId);
+        const dependents = this.getDirectDependents(nodeId);
+        const seen = new Set<string>();
+        const combined: GraphNode[] = [];
+        
+        for (const n of [...deps, ...dependents]) {
+            if (!seen.has(n.id)) {
+                seen.add(n.id);
+                combined.push(n);
+            }
+        }
+        return combined;
+    }
+
     getAllDependents(nodeId: string, maxDepth = 10): Map<string, number> {
         const visited = new Map<string, number>();
         const queue: Array<{ id: string; depth: number }> = [{ id: nodeId, depth: 0 }];

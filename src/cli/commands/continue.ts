@@ -17,7 +17,7 @@ export function continueCommand(): Command {
             const ctx = await loadContext();
             if (!ctx) return;
 
-            const { config, db, sessionId } = ctx;
+            const { config, db, sessionId, graph, store } = ctx;
             const checkpointManager = new CheckpointManager(db);
             const checkpoint = checkpointManager.getLatest();
 
@@ -37,7 +37,7 @@ export function continueCommand(): Command {
             const provider = modelRouter.getProviderForTask('code');
 
             if (checkpoint.taskType === 'agent') {
-                const agent = new AgentLoop(provider, config.rootDir, db, checkpoint.sessionId);
+                const agent = new AgentLoop(provider, config.rootDir, db, checkpoint.sessionId, graph, store);
                 const task = checkpoint.plan[0]?.description ?? 'Unknown task';
                 const steps = checkpoint.metadata.steps ?? [];
                 const files = checkpoint.metadata.filesWritten ?? [];

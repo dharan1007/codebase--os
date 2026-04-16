@@ -86,6 +86,23 @@ export class GraphStore {
         return rows.map(r => this.rowToNode(r));
     }
 
+    getPrimaryNodeForFile(filePath: string): GraphNode | null {
+        const nodes = this.getNodesByFile(filePath);
+        if (nodes.length === 0) return null;
+        
+        // Priority order for the "Primary" representation of a file
+        const priorities: Record<string, number> = {
+            'class': 10,
+            'component': 9,
+            'interface': 8,
+            'module': 7,
+            'function': 6,
+            'file': 5
+        };
+        
+        return nodes.sort((a, b) => (priorities[b.kind] || 0) - (priorities[a.kind] || 0))[0];
+    }
+
     getNodesByKind(kind: string): GraphNode[] {
         const rows = this.db.prepare('SELECT * FROM graph_nodes WHERE kind = ?').all(kind) as NodeRow[];
         return rows.map(r => this.rowToNode(r));
@@ -122,7 +139,6 @@ export class GraphStore {
     }
 
     searchNodesByEmbedding(queryEmbedding: number[], limit = 10): Array<{ node: GraphNode; similarity: number }> {
-        // Fetch all nodes with embeddings
         const rows = this.db.prepare(
             'SELECT id, embedding FROM graph_nodes WHERE embedding IS NOT NULL'
         ).all() as Array<{ id: string; embedding: Buffer }>;
@@ -138,20 +154,25 @@ export class GraphStore {
         scored.sort((a, b) => b.similarity - a.similarity);
         const top = scored.slice(0, limit);
 
-        return top.map(s => ({
-            node: this.getNodeById(s.id)!,
-            similarity: s.similarity
-        }));
+        return top.map(s => {
+            const node = this.getNodeById(s.id);
+            return { node: node!, similarity: s.similarity };
+        });
     }
 
     private cosineSimilarity(v1: number[], v2: number[]): number {
+        const len = v1.length;
         let dotProduct = 0;
         let mag1 = 0;
         let mag2 = 0;
-        for (let i = 0; i < v1.length; i++) {
-            dotProduct += v1[i] * v2[i];
-            mag1 += v1[i] * v1[i];
-            mag2 += v2[i] * v2[i];
+        
+        // Supersonic implementation using local registers
+        for (let i = 0; i < len; i++) {
+            const a = v1[i];
+            const b = v2[i];
+            dotProduct += a * b;
+            mag1 += a * a;
+            mag2 += b * b;
         }
         const mag = Math.sqrt(mag1) * Math.sqrt(mag2);
         return mag === 0 ? 0 : dotProduct / mag;

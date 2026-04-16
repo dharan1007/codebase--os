@@ -2,6 +2,25 @@ import BetterSQLite3, { Database as SQLiteDatabase } from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { logger } from '../utils/logger.js';
+import chalk from 'chalk';
+
+const activeInstances = new Set<Database>();
+
+// Graceful Shutdown Registry
+const cleanup = () => {
+    if (activeInstances.size > 0) {
+        logger.info(chalk.yellow('\n🌀 Shutting down gracefully... Cleaning up resources.'));
+        for (const db of activeInstances) {
+            try {
+                db.close();
+            } catch { /* ignore */ }
+        }
+        activeInstances.clear();
+    }
+};
+
+process.on('SIGINT', () => { cleanup(); process.exit(0); });
+process.on('SIGTERM', () => { cleanup(); process.exit(0); });
 
 export class Database {
     private db: SQLiteDatabase;
@@ -18,6 +37,7 @@ export class Database {
         this.db.pragma('cache_size = -32000');
         this.db.pragma('temp_store = MEMORY');
         this.initialize();
+        activeInstances.add(this);
         logger.debug('Database initialized', { path: dbPath });
     }
 
@@ -145,6 +165,7 @@ export class Database {
     }
 
     close(): void {
+        activeInstances.delete(this);
         this.db.close();
     }
 

@@ -178,6 +178,7 @@ export type AIProviderKind = 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 
 export interface AIProvider {
     kind: AIProviderKind;
     complete(request: AICompletionRequest): Promise<AICompletionResponse>;
+    completeStream?(request: AICompletionRequest, onToken: (token: string) => void): Promise<AICompletionResponse>;
     embed?(text: string): Promise<number[]>;
     batchEmbed?(texts: string[]): Promise<number[][]>;
     isAvailable(): Promise<boolean>;
