@@ -11,7 +11,7 @@
 - You may NOT copy, modify, translate, or build over this code.
 - You may NOT redistribute or sell this software.
 - Unauthorized modifications and pushing them to Git is strictly forbidden.
-- **Copyright (c) 2024 Dharantej Reddy Poduvu.**
+- **Copyright (c) 2026 April 16 Dharantej Reddy Poduvu.**
 
 ---
 
