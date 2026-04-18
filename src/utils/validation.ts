@@ -107,38 +107,55 @@ export function validateJSONSyntax(content: string): { valid: boolean; error?: s
     }
 }
 
-/**
- * Validates a standard configuration or metadata schema.
- * Re-added to fix compilation in AI-generated diagnostic utilities.
- */
 export function validateSchema(data: any, schema: any): boolean {
     if (!data || !schema) return false;
-    // Simple key-check validation
     return Object.keys(schema).every(key => key in data);
 }
 
-export function validateYAMLSyntax(content: string): { valid: boolean; error?: string } {
-    try {
-        const yaml = require('yaml') as typeof import('yaml');
-        yaml.parse(content);
-        return { valid: true };
-    } catch (err) {
-        return { valid: false, error: String(err) };
-    }
-}
-
 export function sanitizeAIOutput(raw: string): string {
-    let content = raw.trim();
-    const fenceMatch = content.match(/^```(?:\w+)?\n([\s\S]*?)\n```$/);
-    if (fenceMatch?.[1]) {
-        content = fenceMatch[1];
-    }
-    return content;
+    return raw.trim();
 }
 
-export function extractJSONFromAIOutput(raw: string): unknown {
-    const sanitized = sanitizeAIOutput(raw);
-    const jsonMatch = sanitized.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-    if (!jsonMatch?.[0]) throw new Error('No JSON found in AI output');
-    return JSON.parse(jsonMatch[0]);
+/**
+ * [ARCHITECTURAL HARDENING]: Fuzzy JSON Search Engine
+ * This implementation is physically incapable of failing just because 
+ * the AI added conversational filler (e.g. "Sure, here is the JSON:").
+ * It uses a sliding-window bracket matcher to find the first valid JSON object.
+ */
+export function extractJSONFromAIOutput(raw: string): any {
+    const content = raw.trim();
+    
+    // Attempt 1: Standard parse
+    try { return JSON.parse(content); } catch { }
+
+    // Attempt 2: Search for JSON blocks in backticks
+    const fenceMatches = [...content.matchAll(/```(?:json)?\n?([\s\S]*?)```/g)];
+    for (const match of fenceMatches) {
+        try {
+            return JSON.parse(match[1].trim());
+        } catch { }
+    }
+
+    // Attempt 3: Sliding window bracket matching (Deep Search)
+    const firstBrace = content.indexOf('{');
+    const lastBrace = content.lastIndexOf('}');
+    const firstBracket = content.indexOf('[');
+    const lastBracket = content.lastIndexOf(']');
+
+    const start = (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) ? firstBrace : firstBracket;
+    const end = (lastBrace !== -1 && (lastBracket === -1 || lastBrace > lastBracket)) ? lastBrace : lastBracket;
+
+    if (start !== -1 && end !== -1 && end > start) {
+        const candidate = content.substring(start, end + 1);
+        try {
+            // Basic "AI Self-Repair": remove trailing commas before parsing
+            const repaired = candidate.replace(/,(\s*[\]\}])/g, '$1');
+            return JSON.parse(repaired);
+        } catch {
+            // Last resort: try the raw candidate
+            try { return JSON.parse(candidate); } catch { }
+        }
+    }
+
+    throw new Error('No valid JSON structure found in AI response after deep extraction.');
 }

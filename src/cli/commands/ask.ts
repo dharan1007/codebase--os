@@ -3,15 +3,12 @@ import chalk from 'chalk';
 import inquirer from 'inquirer';
 import ora from 'ora';
 import path from 'path';
-import fs from 'fs';
 import { loadContext } from '../context.js';
-import { AIProviderFactory } from '../../core/ai/AIProviderFactory.js';
 import { ModelRouter } from '../../core/ai/ModelRouter.js';
 import { ConversationalPlanner } from '../../core/ai/ConversationalPlanner.js';
 import { SelfHealingExecutor } from '../../core/ai/SelfHealingExecutor.js';
-import { GitManager } from '../../core/git/GitManager.js';
-import { logger } from '../../utils/logger.js';
 import { RichFormatter } from '../../core/output/RichFormatter.js';
+import { CheckpointManager } from '../../core/ai/CheckpointManager.js';
 
 export function askCommand(): Command {
     return new Command('ask')
@@ -27,7 +24,7 @@ export function askCommand(): Command {
                 const { input } = await inquirer.prompt([{
                     type: 'input',
                     name: 'input',
-                    message: 'What would you like to change or build?',
+                    message: 'What would you like to build?',
                     validate: (val) => val.trim().length > 0 || 'Please provide a description.',
                 }]);
                 actualRequest = input;
@@ -37,135 +34,83 @@ export function askCommand(): Command {
 
             const ctx = await loadContext();
             if (!ctx) return;
+            const { config, history, sessionId, graph, store, rootDir, db } = ctx;
 
-            const { config, history, sessionId, graph, aiProvider, store } = ctx;
-
-            let router;
-            try {
-                router = new ModelRouter(config);
-            } catch (err) {
-                console.log(chalk.red(`AI provider error: ${String(err)}`));
-                process.exit(1);
-            }
+            const router = new ModelRouter(config);
 
             console.log(chalk.bold('\nCodebase OS — AI Assistant'));
             console.log(chalk.gray('─'.repeat(40)));
             console.log(`  Request: ${chalk.cyan(actualRequest)}`);
-            if (opts.file) console.log(`  Scope:   ${chalk.gray(opts.file)}`);
             console.log('');
 
-            // Step 1 — Plan using the fast planning model
-            const spinnerPlan = ora('Analyzing request and building plan...').start();
+            const spinnerPlan = ora('Thinking...').start();
             const planningProvider = router.getProviderForTask('planning');
             const planner = new ConversationalPlanner(planningProvider, graph, store);
 
             let plan;
             try {
                 plan = await planner.plan(
-                    opts.file ? `${actualRequest} (focus on file: ${opts.file})` : actualRequest,
-                    config.rootDir,
-                    opts.file ? opts.file : undefined
+                    opts.file ? `${actualRequest} (focus: ${opts.file})` : actualRequest,
+                    rootDir,
+                    opts.file
                 );
-                spinnerPlan.succeed(`Plan ready — ${plan.tasks.length} tasks, estimated effort: ${chalk.yellow(plan.estimatedEffort)}`);
+                spinnerPlan.stop();
             } catch (err) {
-                spinnerPlan.fail(`Planning failed: ${String(err)}`);
+                spinnerPlan.fail(`Error: ${String(err)}`);
                 return;
             }
 
-            if (plan.tasks.length === 0) {
-                console.log(chalk.yellow('\nAI could not determine what changes to make for this request.'));
+            // [STATELESS INQUIRY]: Direct response path
+            if (plan.answer && (!plan.tasks || plan.tasks.length === 0)) {
+                console.log(chalk.bold('Assistant Engineering Analysis:'));
+                console.log(chalk.gray('─'.repeat(40)));
+                console.log(plan.answer);
+                console.log(chalk.gray('─'.repeat(40)));
+                console.log('');
+
+                // [ROOT CAUSE 7]: Explicitly clear any stale checkpoints for this session
+                const checkpointManager = new CheckpointManager(db);
+                const latest = checkpointManager.getLatest();
+                if (latest && latest.sessionId === sessionId) {
+                    checkpointManager.clear(latest.id);
+                }
                 return;
             }
 
-            // Step 2 — Show plan to user
-            console.log('');
-            console.log(chalk.bold(`Assistant: ${plan.summary}`));
+            if (!plan.tasks || plan.tasks.length === 0) {
+                console.log(chalk.yellow('\nAI could not determine any necessary actions.'));
+                if (plan.answer) console.log('\n' + plan.answer);
+                return;
+            }
+
+            // Standard Change Flow
+            console.log(chalk.bold(`Proposed Plan: ${plan.summary}`));
             console.log(RichFormatter.formatAITasks(plan.tasks));
 
-            // Step 3 — Confirm
             if (!opts.yes) {
                 const { proceed } = await inquirer.prompt([{
                     type: 'confirm',
                     name: 'proceed',
-                    message: opts.dryRun
-                        ? `Proceed to preview ${plan.tasks.length} change(s)?`
-                        : `Proceed to apply ${plan.tasks.length} change(s)?`,
+                    message: opts.dryRun ? 'Proceed to preview changes?' : 'Proceed to apply changes?',
                     default: true,
                 }]);
-                if (!proceed) {
-                    console.log(chalk.yellow('Cancelled.'));
-                    return;
-                }
+                if (!proceed) return;
             }
 
-            // Step 4 — Execute with self-healing, using the powerful code model
             const codeProvider = router.getProviderForTask('code');
-            const healingExecutor = new SelfHealingExecutor(codeProvider, config, history, sessionId, ctx.db);
-
-            // Pre-create any new files the plan needs
-            for (const task of plan.tasks) {
-                if (!fs.existsSync(task.targetFile)) {
-                    const dir = path.dirname(task.targetFile);
-                    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-                    fs.writeFileSync(task.targetFile, '', 'utf8');
-                }
-            }
-
-            const spinners = new Map<string, ReturnType<typeof ora>>();
+            const healingExecutor = new SelfHealingExecutor(codeProvider, config, history, sessionId, db);
 
             const healResult = await healingExecutor.executeAndHeal(
                 plan.tasks,
-                opts.dryRun as boolean ?? false,
+                opts.dryRun,
                 (label, status, detail) => {
-                    const rel = path.relative(config.rootDir, label);
+                    const rel = path.relative(rootDir, label);
                     if (status === 'start') {
-                        const sp = ora(`${opts.dryRun ? 'Previewing' : 'Applying'}: ${rel}`).start();
-                        spinners.set(label, sp);
-                    } else if (status === 'done') {
-                        spinners.get(label)?.succeed(`Applied — ${detail ?? 'done'}`);
-                        spinners.delete(label);
-                    } else {
-                        spinners.get(label)?.fail(`Failed: ${detail ?? 'error'}`);
-                        spinners.delete(label);
+                        ora(`${opts.dryRun ? 'Previewing' : 'Applying'}: ${rel}`).start();
                     }
                 }
             );
 
-            const results = healResult.finalResults;
-
-            // Show diff previews
-            if (opts.dryRun) {
-                for (const r of results.filter(r => r.diff)) {
-                    console.log(RichFormatter.formatDiff(r.diff));
-                }
-            }
-
-            // Step 5 — Summary
-            console.log(RichFormatter.formatExecutionTable(results));
-            const appliedCount = results.filter(r => r.success && r.appliedAt).length;
-
-            if (!opts.dryRun) {
-                if (healResult.healed) {
-                    console.log(`  ${chalk.cyan('Self-healed')} compile errors automatically.`);
-                } else if (healResult.remainingErrors > 0) {
-                    console.log(`  ${chalk.yellow(`${healResult.remainingErrors} errors remain`)} — run 'cos fix' to fix manually.`);
-                } else {
-                    console.log(`  ${chalk.green('✓ All changes compile cleanly.')}`);
-                }
-            }
-            if (opts.dryRun) console.log(chalk.cyan('\n  Note: Dry run — no physical changes were made.'));
-
-            // Step 6 — Auto-commit
-            if (opts.autoCommit && !opts.dryRun && appliedCount > 0) {
-                const gitManager = new GitManager(config.rootDir);
-                if (gitManager.isGitRepo()) {
-                    gitManager.add([]);
-                    const commitMsg = `feat: ${plan.summary}`;
-                    if (gitManager.commit(commitMsg)) {
-                        console.log(chalk.green(`  Auto-committed: "${commitMsg}"`));
-                    }
-                }
-            }
-            console.log('');
+            console.log(RichFormatter.formatExecutionTable(healResult.finalResults));
         });
 }

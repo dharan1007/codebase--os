@@ -85,4 +85,25 @@ export class OpenAIProvider implements AIProvider {
             return false;
         }
     }
+
+    async embed(text: string): Promise<number[]> {
+        return this.limiter.execute(async () => {
+            const response = await this.client.embeddings.create({
+                model: 'text-embedding-3-small',
+                input: text,
+            });
+            return response.data[0].embedding;
+        });
+    }
+
+    async batchEmbed(texts: string[]): Promise<number[][]> {
+        if (texts.length === 0) return [];
+        return this.limiter.execute(async () => {
+            const response = await this.client.embeddings.create({
+                model: 'text-embedding-3-small',
+                input: texts,
+            });
+            return response.data.map(d => d.embedding);
+        });
+    }
 }

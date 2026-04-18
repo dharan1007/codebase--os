@@ -207,7 +207,7 @@ export interface AICompletionResponse {
 
 export interface AITask {
     id: string;
-    kind: 'fix' | 'update' | 'generate' | 'refactor' | 'sync';
+    kind: 'fix' | 'update' | 'generate' | 'refactor' | 'sync' | 'informational';
     description: string;
     targetFile: string;
     targetNodeId?: string;

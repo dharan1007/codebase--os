@@ -22,14 +22,64 @@ export async function readFileTool(filePath: string, rootDir: string): Promise<T
     }
 }
 
-/** Writes file content as directed by the AI agent */
+/** Writes/Creates file content as directed by the AI agent */
 export async function writeFileTool(filePath: string, content: string, rootDir: string): Promise<ToolResult> {
     try {
         const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(rootDir, filePath);
         const dir = path.dirname(resolved);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        
+        const isNew = !fs.existsSync(resolved);
         fs.writeFileSync(resolved, content, 'utf8');
-        return { success: true, output: `Written: ${path.relative(rootDir, resolved)}` };
+        
+        return { 
+            success: true, 
+            output: `${isNew ? 'Created' : 'Updated'}: ${path.relative(rootDir, resolved)}` 
+        };
+    } catch (err) {
+        return { success: false, output: '', error: String(err) };
+    }
+}
+
+/** Deletes a file as directed by the AI agent (Safety warning: irreversible) */
+export async function deleteFileTool(filePath: string, rootDir: string): Promise<ToolResult> {
+    try {
+        const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(rootDir, filePath);
+        if (!fs.existsSync(resolved)) {
+            return { success: false, output: '', error: `File not found: ${filePath}` };
+        }
+        
+        const stats = fs.statSync(resolved);
+        if (stats.isDirectory()) {
+            fs.rmSync(resolved, { recursive: true, force: true });
+            return { success: true, output: `Deleted directory: ${path.relative(rootDir, resolved)}` };
+        } else {
+            fs.unlinkSync(resolved);
+            return { success: true, output: `Deleted file: ${path.relative(rootDir, resolved)}` };
+        }
+    } catch (err) {
+        return { success: false, output: '', error: String(err) };
+    }
+}
+
+/** Moves or Renames a file/directory */
+export async function moveFileTool(oldPath: string, newPath: string, rootDir: string): Promise<ToolResult> {
+    try {
+        const resolvedOld = path.isAbsolute(oldPath) ? oldPath : path.resolve(rootDir, oldPath);
+        const resolvedNew = path.isAbsolute(newPath) ? newPath : path.resolve(rootDir, newPath);
+        
+        if (!fs.existsSync(resolvedOld)) {
+            return { success: false, output: '', error: `Source not found: ${oldPath}` };
+        }
+        
+        const dir = path.dirname(resolvedNew);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        
+        fs.renameSync(resolvedOld, resolvedNew);
+        return { 
+            success: true, 
+            output: `Moved ${path.relative(rootDir, resolvedOld)} to ${path.relative(rootDir, resolvedNew)}` 
+        };
     } catch (err) {
         return { success: false, output: '', error: String(err) };
     }
@@ -55,7 +105,7 @@ export async function listFilesTool(dirPath: string, rootDir: string): Promise<T
             }
         };
         walk(resolved, 0);
-        return { success: true, output: files.slice(0, 80).join('\n') };
+        return { success: true, output: files.slice(0, 100).join('\n') };
     } catch (err) {
         return { success: false, output: '', error: String(err) };
     }

@@ -5,7 +5,6 @@ import { GraphStore } from '../../storage/GraphStore.js';
 import type { AIProvider } from '../../types/index.js';
 import { logger } from '../../utils/logger.js';
 import path from 'path';
-import fs from 'fs';
 
 export interface GraphContext {
     relevantFiles: string[];
@@ -17,10 +16,19 @@ export interface GraphContext {
 }
 
 /**
- * GraphContextBuilder enriches AI planning prompts with real structural
- * intelligence from the relationship graph. This is the primary differentiator
- * over tools like Claude Code that only see flat file lists.
+ * [ARCHITECTURAL HARDENING]: Semantic Context Cache
+ * This protects against Root Cause 9 by caching structural summaries
+ * and semantic embeddings for the duration of the process.
  */
+class GlobalContextCache {
+    private static cache: Map<string, GraphContext> = new Map();
+    static get(key: string): GraphContext | undefined { return this.cache.get(key); }
+    static set(key: string, val: GraphContext) { 
+        if (this.cache.size > 20) this.cache.clear();
+        this.cache.set(key, val); 
+    }
+}
+
 export class GraphContextBuilder {
     private engine: GraphQueryEngine;
 
@@ -28,14 +36,16 @@ export class GraphContextBuilder {
         this.engine = new GraphQueryEngine(graph);
     }
 
-    /**
-     * Build a rich context string for a given request and optional focus files.
-     * This replaces a flat file listing with meaningful structural data.
-     */
     async build(request: string, rootDir: string, focusFiles?: string[]): Promise<GraphContext> {
+        const cacheKey = `${request}|${focusFiles?.join(',')}`;
+        const cached = GlobalContextCache.get(cacheKey);
+        if (cached) {
+            logger.debug('Context cache hit', { request });
+            return cached;
+        }
+
         const requestWords = this.extractKeywords(request);
         
-        // 1. Semantic Search (Vector RAG)
         let semanticSnippets: Array<{ node: GraphNode; similarity: number }> = [];
         if (this.aiProvider?.embed) {
             try {
@@ -46,20 +56,15 @@ export class GraphContextBuilder {
             }
         }
 
-        // 1. Find nodes most relevant to the request
         const relevantNodes = this.findRelevantNodes(requestWords, focusFiles);
-
-        // 2. Find top connected hub files
         const topConnected = this.engine.getMostConnectedNodes(8);
-
-        // 3. Detect cross-layer issues in relevant area
         const crossLayerConns = this.engine.getCrossLayerConnections();
+        
         const crossLayerWarnings = crossLayerConns
             .filter(c => relevantNodes.some(n => n.id === c.sourceNode.id || n.id === c.targetNode.id))
             .slice(0, 5)
             .map(c => `${c.sourceNode.name} (${c.sourceLayer}) depends on ${c.targetNode.name} (${c.targetLayer})`);
 
-        // 4. Detect cycles near relevant nodes
         const cycles = this.engine.findCycles();
         const cyclicDependencies = cycles
             .filter(cycle => relevantNodes.some(n => cycle.includes(n.id)))
@@ -69,7 +74,6 @@ export class GraphContextBuilder {
                 return `Cycle: ${names.join(' → ')}`;
             });
 
-        // 5. Collect unique relevant files
         const relevantFiles = Array.from(new Set([
             ...relevantNodes.map(n => path.relative(rootDir, n.filePath)),
             ...topConnected.map(t => path.relative(rootDir, t.node.filePath)),
@@ -85,49 +89,39 @@ export class GraphContextBuilder {
                 (this.graph.reverseAdjacency.get(n.id)?.size ?? 0),
         }));
 
-        const summary = this.buildSummary(relevantNodes, crossLayerWarnings, cyclicDependencies, rootDir);
+        const summary = this.buildSummary(relevantNodes, crossLayerWarnings, cyclicDependencies);
 
-        return { relevantFiles, keyNodes, crossLayerWarnings, cyclicDependencies, semanticSnippets, summary };
+        const result = { relevantFiles, keyNodes, crossLayerWarnings, cyclicDependencies, semanticSnippets, summary };
+        GlobalContextCache.set(cacheKey, result);
+        return result;
     }
 
-    /**
-     * Format the graph context as a compact, AI-readable string block.
-     */
     format(context: GraphContext): string {
         const lines: string[] = [];
-
         lines.push('=== STRUCTURAL GRAPH CONTEXT ===');
-        lines.push('(This is real structural data from the project\'s relationship graph.)');
+        lines.push('(Structural data from the relationship graph.)');
         lines.push('');
 
         if (context.keyNodes.length > 0) {
-            lines.push('Key Components Near This Request:');
+            lines.push('Key Components Near Request:');
             for (const n of context.keyNodes) {
-                lines.push(`  • ${n.name} [${n.kind}/${n.layer}] — ${n.file} (${n.connections} connections)`);
+                lines.push(`  • ${n.name} [${n.kind}/${n.layer}] — ${n.file} (${n.connections} conns)`);
             }
             lines.push('');
         }
 
         if (context.relevantFiles.length > 0) {
-            lines.push('All Relevant Files:');
+            lines.push('Relevant Files:');
             for (const f of context.relevantFiles) {
                 lines.push(`  - ${f}`);
             }
             lines.push('');
         }
 
-        if (context.crossLayerWarnings.length > 0) {
-            lines.push('Cross-Layer Dependencies to Consider:');
-            for (const w of context.crossLayerWarnings) {
-                lines.push(`  ! ${w}`);
-            }
-            lines.push('');
-        }
-
         if (context.semanticSnippets.length > 0) {
-            lines.push('Semantically Related Components (AI Match):');
+            lines.push('Semantically Related (Vector RAG):');
             for (const s of context.semanticSnippets.slice(0, 8)) {
-                lines.push(`  ≈ ${s.node.name} [match: ${(s.similarity * 100).toFixed(0)}%] — ${s.node.filePath}`);
+                lines.push(`  ≈ ${s.node.name} [${(s.similarity * 100).toFixed(0)}%] — ${s.node.filePath}`);
             }
             lines.push('');
         }
@@ -145,16 +139,13 @@ export class GraphContextBuilder {
             const nodeName = node.name.toLowerCase();
             const nodeFile = node.filePath.toLowerCase();
 
-            // Keyword match in name
             for (const kw of keywords) {
                 if (nodeName.includes(kw)) score += 3;
                 if (nodeFile.includes(kw)) score += 1;
             }
 
-            // Boost nodes in focus files
             if (focusFiles?.some(f => node.filePath.includes(f))) score += 10;
 
-            // Boost high-connectivity nodes
             const connections =
                 (this.graph.adjacency.get(node.id)?.size ?? 0) +
                 (this.graph.reverseAdjacency.get(node.id)?.size ?? 0);
@@ -175,14 +166,14 @@ export class GraphContextBuilder {
             .filter(w => w.length > 2 && !stopWords.has(w));
     }
 
-    private buildSummary(nodes: GraphNode[], crossLayer: string[], cycles: string[], rootDir: string): string {
+    private buildSummary(nodes: GraphNode[], crossLayer: string[], cycles: string[]): string {
         const layerCounts: Record<string, number> = {};
         for (const n of nodes.slice(0, 20)) {
             layerCounts[n.layer] = (layerCounts[n.layer] ?? 0) + 1;
         }
         const layerStr = Object.entries(layerCounts).map(([l, c]) => `${c} ${l}`).join(', ');
-        const warnings = crossLayer.length > 0 ? ` ${crossLayer.length} cross-layer warning(s).` : '';
-        const cycleStr = cycles.length > 0 ? ` ${cycles.length} cyclic dependency(ies) detected.` : '';
-        return `Graph: ${nodes.length} relevant nodes (${layerStr}).${warnings}${cycleStr}`;
+        const warnings = crossLayer.length > 0 ? ` ${crossLayer.length} x-layer warnings.` : '';
+        const cycleStr = cycles.length > 0 ? ` ${cycles.length} cycles.` : '';
+        return `Graph: ${nodes.length} nodes (${layerStr}).${warnings}${cycleStr}`;
     }
 }

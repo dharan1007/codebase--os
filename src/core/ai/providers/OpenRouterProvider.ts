@@ -10,7 +10,6 @@ export class OpenRouterProvider implements AIProvider {
 
     constructor(private apiKey: string, model = 'anthropic/claude-3.5-sonnet') {
         this.defaultModel = model;
-        // OpenRouter acts as a proxy, so we enforce a generous pooled limit
         this.limiter = new RateLimiter({
             maxConcurrency: 5,
             requestsPerMinute: 60,
@@ -32,16 +31,18 @@ export class OpenRouterProvider implements AIProvider {
         onToken?: (token: string) => void
     ): Promise<AICompletionResponse> {
         return this.limiter.execute(async () => {
-            const model = request.model ?? this.defaultModel;
+        const model = request.model ?? this.defaultModel;
+
+        // [ARCHITECTURAL HARDENING]: Role Normalization (Fix for error 400)
+        // Many free models (especially Google AI Studio proxied through OpenRouter) 
+        // DO NOT support the 'system' role. We normalize by merging it into the first user message.
+        const messages = this.normalizeMessages(request.systemPrompt, request.userPrompt, model);
 
         const body = {
             model,
-            messages: [
-                { role: 'system', content: request.systemPrompt },
-                { role: 'user', content: request.userPrompt },
-            ],
+            messages,
             temperature: request.temperature ?? 0.2,
-            max_tokens: request.maxTokens ?? 4096,
+            max_tokens: request.maxTokens ?? 3000,
             stream
         };
 
@@ -65,6 +66,9 @@ export class OpenRouterProvider implements AIProvider {
 
             if (!response.ok) {
                 const text = await response.text();
+                if (response.status === 402) {
+                    throw new Error(`OpenRouter Credit Error: Your balance is too low for this request (requested ${body.max_tokens} tokens).`);
+                }
                 throw new Error(`OpenRouter API error ${response.status}: ${text}`);
             }
 
@@ -91,9 +95,7 @@ export class OpenRouterProvider implements AIProvider {
                                     fullContent += token;
                                     onToken?.(token);
                                 }
-                            } catch {
-                                // Skip malformed chunks
-                            }
+                            } catch { }
                         }
                     }
                 }
@@ -101,7 +103,7 @@ export class OpenRouterProvider implements AIProvider {
                 return {
                     content: fullContent,
                     model,
-                    usage: { inputTokens: 0, outputTokens: 0 }, // Usage often not sent in stream until end
+                    usage: { inputTokens: 0, outputTokens: 0 },
                     provider: this.kind,
                 };
             }
@@ -123,6 +125,33 @@ export class OpenRouterProvider implements AIProvider {
         });
     }
 
+    /**
+     * Normalizes system/user prompts into a format acceptable by the specific model.
+     * Prevents "Developer instruction not enabled" (400) errors.
+     */
+    private normalizeMessages(system: string, user: string, model: string): Array<{ role: string, content: string }> {
+        // [HEURISTIC]: Most free tier models and Gemma variants prefer combined prompts.
+        // To ensure 100% compatibility across the diverse OpenRouter pool, 
+        // we use a combined "Developer Instruction" preamble in the user role.
+        const isFree = model.endsWith(':free');
+        const isGemma = model.includes('gemma');
+        
+        if (isFree || isGemma) {
+            return [
+                { 
+                    role: 'user', 
+                    content: `[DEVELOPER INSTRUCTIONS]\n${system}\n\n[USER REQUEST]\n${user}` 
+                }
+            ];
+        }
+
+        // Standard role support for high-end models (Claude/GPT)
+        return [
+            { role: 'system', content: system },
+            { role: 'user', content: user }
+        ];
+    }
+
     async listModels(): Promise<string[]> {
         try {
             const response = await fetch(`${this.baseURL}/models`, {
@@ -132,9 +161,7 @@ export class OpenRouterProvider implements AIProvider {
                     'X-Title': 'Codebase OS',
                 },
             });
-
             if (!response.ok) return [];
-
             const data = await response.json() as { data: Array<{ id: string }> };
             return data.data.map(m => m.id);
         } catch (err) {
@@ -149,8 +176,45 @@ export class OpenRouterProvider implements AIProvider {
                 headers: { Authorization: `Bearer ${this.apiKey}` },
             });
             return resp.ok;
-        } catch {
-            return false;
-        }
+        } catch { return false; }
+    }
+
+    async embed(text: string): Promise<number[]> {
+        return this.limiter.execute(async () => {
+            const response = await fetch(`${this.baseURL}/embeddings`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'openai/text-embedding-3-small',
+                    input: text,
+                }),
+            });
+            if (!response.ok) return [];
+            const data = await response.json() as any;
+            return data.data[0].embedding;
+        });
+    }
+
+    async batchEmbed(texts: string[]): Promise<number[][]> {
+        if (texts.length === 0) return [];
+        return this.limiter.execute(async () => {
+            const response = await fetch(`${this.baseURL}/embeddings`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'openai/text-embedding-3-small',
+                    input: texts,
+                }),
+            });
+            if (!response.ok) return texts.map(() => []);
+            const data = await response.json() as any;
+            return data.data.map((d: any) => d.embedding);
+        });
     }
 }
