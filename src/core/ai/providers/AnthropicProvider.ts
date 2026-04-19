@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { AIProvider, AICompletionRequest, AICompletionResponse, AIProviderKind } from '../../../types/index.js';
+import type { AIProvider, ModelRequest, ModelResponse, AIProviderKind } from '../../../types/index.js';
 import { logger } from '../../../utils/logger.js';
 import { RateLimiter } from '../../../utils/RateLimiter.js';
 export class AnthropicProvider implements AIProvider {
@@ -8,7 +8,7 @@ export class AnthropicProvider implements AIProvider {
     private defaultModel: string;
     private limiter: RateLimiter;
 
-    constructor(apiKey: string, model = 'claude-3-5-sonnet-20241022') {
+    constructor(apiKey: string, model = 'claude-3-5-sonnet-latest') {
         this.client = new Anthropic({ 
             apiKey,
             timeout: 300000 // 5 minutes persistence
@@ -23,16 +23,16 @@ export class AnthropicProvider implements AIProvider {
         });
     }
 
-    async complete(request: AICompletionRequest): Promise<AICompletionResponse> {
+    async execute(request: ModelRequest): Promise<ModelResponse> {
         return this.limiter.execute(async () => {
-            const model = request.model ?? this.defaultModel;
+            const model = request.modelOverride ?? this.defaultModel;
 
             try {
                 const response = await this.client.messages.create({
                     model,
-                    max_tokens: request.maxTokens ?? 4096,
+                    max_tokens: request.maxTokens,
                     system: request.systemPrompt,
-                    messages: [{ role: 'user', content: request.userPrompt }],
+                    messages: [{ role: 'user', content: request.context }],
                     temperature: request.temperature ?? 0.2,
                 });
 
@@ -43,42 +43,35 @@ export class AnthropicProvider implements AIProvider {
 
                 return {
                     content,
-                    model,
                     usage: {
-                        inputTokens: response.usage.input_tokens,
+                        promptTokens: response.usage.input_tokens,
                         outputTokens: response.usage.output_tokens,
+                        totalTokens: response.usage.input_tokens + response.usage.output_tokens,
                     },
                     provider: this.kind,
+                    model,
                 };
             } catch (err) {
-                logger.error('Anthropic completion failed', { error: String(err) });
+                logger.error('Anthropic execution failed', { error: String(err) });
                 throw err;
             }
         });
     }
 
-    async listModels(): Promise<string[]> {
-        try {
-            // Anthropic SDK v0.20+ supports models.list()
-            if (typeof (this.client as any).models?.list === 'function') {
-                const response = await (this.client as any).models.list();
-                if (response?.data?.length > 0) {
-                    return response.data.map((m: any) => m.id);
-                }
-            }
-        } catch {
-            // Fall through to hardcoded if API endpoint is restricted
-        }
-        
-        return [
-            'claude-3-7-sonnet-20250219',
-            'claude-3-5-sonnet-20241022',
-            'claude-3-5-haiku-20241022',
-            'claude-3-opus-20240229'
-        ];
-    }
+
 
     async isAvailable(): Promise<boolean> {
         return true;
+    }
+
+    async listModels(): Promise<string[]> {
+        return [
+            'claude-3-5-sonnet-latest',
+            'claude-3-5-haiku-latest',
+            'claude-3-opus-latest',
+            'claude-3-opus-20240229',
+            'claude-3-sonnet-20240229',
+            'claude-3-haiku-20240307'
+        ];
     }
 }

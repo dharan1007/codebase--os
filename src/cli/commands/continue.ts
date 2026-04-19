@@ -6,7 +6,8 @@ import { loadContext } from '../context.js';
 import { CheckpointManager } from '../../core/ai/CheckpointManager.js';
 import { AgentLoop } from '../../core/ai/AgentLoop.js';
 import { SelfHealingExecutor } from '../../core/ai/SelfHealingExecutor.js';
-import { ModelRouter } from '../../core/ai/ModelRouter.js';
+import { ModelRouter } from '../../core/orchestrator/ModelRouter.js';
+import { ResourceMonitor } from '../../core/orchestrator/ResourceMonitor.js';
 import { RichFormatter } from '../../core/output/RichFormatter.js';
 import { ChangeHistory } from '../../storage/ChangeHistory.js';
 
@@ -33,7 +34,8 @@ export function continueCommand(): Command {
             console.log(`  Updated:   ${new Date(checkpoint.updatedAt).toLocaleString()}`);
             console.log('');
 
-            const modelRouter = new ModelRouter(config);
+            const monitor = new ResourceMonitor(db);
+            const modelRouter = new ModelRouter(config, db, monitor);
             const provider = modelRouter.getProviderForTask('code');
 
             if (checkpoint.taskType === 'agent') {
@@ -45,9 +47,13 @@ export function continueCommand(): Command {
                 console.log(chalk.yellow(`Resuming autonomous agent from step ${steps.length + 1}...`));
                 
                 const spinner = ora('Agent is working...').start();
-                const result = await agent.run(task, (step, action, toolResult) => {
-                    spinner.start(`Agent working... (step ${step}: ${action.tool})`);
-                }, steps, files);
+                const result = await agent.run(task, {
+                    onStep: async (step: number, action: any, toolResult: any) => {
+                        spinner.start(`Agent working... (step ${step}: ${action.tool})`);
+                    },
+                    initialSteps: steps,
+                    initialFiles: files
+                });
                 
                 spinner.stop();
                 console.log(chalk.bold('\nAgent Summary'));

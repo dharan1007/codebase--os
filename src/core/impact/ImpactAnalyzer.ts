@@ -138,18 +138,88 @@ export class ImpactAnalyzer {
         impactedNodes: ImpactReport['impactedNodes'],
         crossLayerIssues: CrossLayerIssue[]
     ): string {
-        const lines = [
-            `Change to ${change.filePath} (${change.changeType}, ${classified.severity} severity)`,
-            `Scopes: ${classified.scopes.join(', ')}`,
-            `Impacts ${impactedNodes.length} node(s) across ${new Set(impactedNodes.map(n => n.node.layer)).size} layer(s)`,
-        ];
-        if (classified.breakingChanges.length > 0) {
-            lines.push(`Breaking changes detected: ${classified.breakingChanges.length}`);
+        const impactedIds = impactedNodes.map(n => n.node.id);
+        const testCoverage = this.analyzeTestCoverage(impactedIds);
+        
+        const sourceNodes = this.graph.getNodesByFile(change.filePath);
+        let criticalPath = 'None';
+        for (const n of sourceNodes) {
+             const cp = this.findCriticalPath(n.id);
+             if (cp !== 'Local Component (No isolated path found)') {
+                 criticalPath = cp;
+                 break;
+             }
         }
+
+        let impactLevel = 'LOW';
+        if (classified.breakingChanges.length > 0 || classified.severity === 'breaking' || impactedNodes.length > 10) {
+            impactLevel = 'HIGH';
+        } else if (classified.severity === 'major' || impactedNodes.length > 3) {
+            impactLevel = 'MEDIUM';
+        }
+
+        const lines = [
+            `Impact Level: ${impactLevel}`,
+            `Affected Files: ${new Set(impactedNodes.map(n => n.node.filePath)).size}`,
+            `Critical Paths: ${criticalPath}`,
+            `Test Coverage: ${testCoverage}`
+        ];
+        
         if (crossLayerIssues.length > 0) {
-            lines.push(`Cross-layer issues: ${crossLayerIssues.length}`);
+            lines.push(`Cross-layer issues flagged: ${crossLayerIssues.length}`);
         }
         return lines.join('\n');
+    }
+
+    private analyzeTestCoverage(impactedIds: string[]): string {
+        let testedNodes = 0;
+        let testFiles = new Set<string>();
+
+        for (const id of impactedIds) {
+            const incoming = this.graph.getIncomingEdges(id);
+            const testEdges = incoming.filter(e => e.kind === 'tests' as any);
+            if (testEdges.length > 0) {
+                testedNodes++;
+                for (const te of testEdges) {
+                    const testNode = this.graph.getNode(te.sourceId);
+                    if (testNode) testFiles.add(testNode.filePath);
+                }
+            }
+        }
+
+        if (impactedIds.length === 0) return 'N/A';
+        const coveragePcnt = Math.round((testedNodes / impactedIds.length) * 100);
+        let conf = 'low confidence';
+        if (coveragePcnt > 70) conf = 'high confidence';
+        else if (coveragePcnt > 30) conf = 'medium confidence';
+
+        return `${coveragePcnt}% (${conf})`;
+    }
+
+    private findCriticalPath(startNodeId: string): string {
+        const visited = new Set<string>();
+        const queue: Array<{ id: string; path: string[] }> = [{ id: startNodeId, path: [] }];
+
+        while (queue.length > 0) {
+            const current = queue.shift()!;
+            const node = this.graph.getNode(current.id);
+            if (!node) continue;
+
+            const currentPath = [...current.path, node.name];
+
+            if (node.layer === 'api' || node.layer === 'frontend') {
+                return currentPath.join(' → ');
+            }
+
+            visited.add(current.id);
+            const dependents = this.graph.reverseAdjacency.get(current.id) || new Set();
+            for (const depId of dependents) {
+                if (!visited.has(depId) && currentPath.length < 5) { // bound depth
+                    queue.push({ id: depId, path: currentPath });
+                }
+            }
+        }
+        return 'Local Component (No isolated path found)';
     }
 
     private getFileLayer(filePath: string): Layer {

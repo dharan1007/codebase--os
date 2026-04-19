@@ -1,4 +1,4 @@
-import type { AIProvider, AICompletionRequest, AICompletionResponse, AIProviderKind } from '../../../types/index.js';
+import type { AIProvider, ModelRequest, ModelResponse, AIProviderKind } from '../../../types/index.js';
 import { logger } from '../../../utils/logger.js';
 import { RateLimiter } from '../../../utils/RateLimiter.js';
 
@@ -8,47 +8,40 @@ export class OllamaProvider implements AIProvider {
     private defaultModel: string;
     private limiter: RateLimiter;
 
-    constructor(baseURL = 'http://localhost:11434', model = 'codellama:34b') {
+    constructor(baseURL = 'http://localhost:11434', model = 'llama-3.2:3b') {
         this.baseURL = baseURL.replace(/\/$/, '');
         this.defaultModel = model;
         
-        // Local Ollama limits (concurrency safe to prevent OOM)
         this.limiter = new RateLimiter({
-            maxConcurrency: 1, // Local engines usually perform best one at a time
-            requestsPerMinute: 30, // Throttled to prevent CPU spikes
+            maxConcurrency: 1,
+            requestsPerMinute: 30,
             delayBetweenRequestsMs: 1000
         });
     }
 
-    async complete(request: AICompletionRequest): Promise<AICompletionResponse> {
+    async execute(request: ModelRequest): Promise<ModelResponse> {
         return this.limiter.execute(async () => {
-            const model = request.model ?? this.defaultModel;
+            const model = request.modelOverride ?? this.defaultModel;
 
             const body = {
                 model,
                 messages: [
-                    { role: 'system', content: request.systemPrompt },
-                    { role: 'user', content: request.userPrompt },
+                    { role: 'system', content: request.systemPrompt ?? 'You are a coding assistant.' },
+                    { role: 'user', content: request.context },
                 ],
                 stream: false,
                 options: {
                     temperature: request.temperature ?? 0.2,
-                    num_predict: request.maxTokens ?? 4096,
+                    num_predict: request.maxTokens,
                 },
             };
 
             try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes
-
                 const response = await fetch(`${this.baseURL}/api/chat`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body),
-                    signal: controller.signal
                 });
-
-                clearTimeout(timeoutId);
 
                 if (!response.ok) {
                     throw new Error(`Ollama API error ${response.status}: ${await response.text()}`);
@@ -62,30 +55,19 @@ export class OllamaProvider implements AIProvider {
 
                 return {
                     content: data.message?.content ?? '',
-                    model,
                     usage: {
-                        inputTokens: data.prompt_eval_count ?? 0,
+                        promptTokens: data.prompt_eval_count ?? 0,
                         outputTokens: data.eval_count ?? 0,
+                        totalTokens: (data.prompt_eval_count ?? 0) + (data.eval_count ?? 0),
                     },
                     provider: this.kind,
+                    model,
                 };
             } catch (err) {
-                logger.error('Ollama completion failed', { error: String(err) });
+                logger.error('Ollama execution failed', { error: String(err) });
                 throw err;
             }
         });
-    }
-
-    async listModels(): Promise<string[]> {
-        try {
-            const response = await fetch(`${this.baseURL}/api/tags`);
-            if (!response.ok) return [];
-            const data = await response.json() as { models: Array<{ name: string }> };
-            return data.models.map(m => m.name);
-        } catch (err) {
-            logger.error('Failed to fetch Ollama models', { error: String(err) });
-            return ['codellama:34b', 'llama3', 'mistral', 'phi3'];
-        }
     }
 
     async isAvailable(): Promise<boolean> {

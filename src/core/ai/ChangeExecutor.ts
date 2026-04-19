@@ -49,15 +49,17 @@ Output ONLY the complete updated file content. No markdown. No explanation. Raw 
         let confidence = 0.8;
 
         try {
-            const response = await this.provider.complete({
+            const result = await this.provider.execute({
+                taskType: 'reasoning',
+                priority: 'medium',
+                context: userPrompt,
                 systemPrompt,
-                userPrompt,
-                temperature: this.config.ai.temperature,
-                maxTokens: this.config.ai.maxTokens,
+                maxTokens: this.config.ai.maxTokens || 4000,
+                filePath: task.targetFile,
             });
 
-            updatedContent = sanitizeAIOutput(response.content);
-            confidence = this.estimateConfidence(response.usage.outputTokens, originalContent, updatedContent);
+            updatedContent = sanitizeAIOutput(result.content);
+            confidence = this.estimateConfidence(result.usage.outputTokens, originalContent, updatedContent);
         } catch (err) {
             const errorMsg = `AI execution failed: ${String(err)}`;
             logger.error(errorMsg, { task: task.id });
@@ -90,33 +92,31 @@ Output ONLY the complete updated file content. No markdown. No explanation. Raw 
 
         result = this.validator.validate(result);
 
-        if (!dryRun && result.success && result.confidence >= 0.5) {
-            this.applyChange(task.targetFile, updatedContent);
-
-            const changeId = uuidv4();
-            this.history.record({
-                id: changeId,
-                sessionId: this.sessionId,
-                taskId: task.id,
-                filePath: task.targetFile,
-                originalContent,
-                updatedContent,
-                diff: diff.raw,
-                appliedAt: Date.now(),
-                provider: this.provider.kind,
-                confidence: result.confidence,
-            });
-
-            result.appliedAt = Date.now();
-            logger.info('Change applied', {
-                file: task.targetFile,
-                confidence: result.confidence,
-                additions: diff.additions,
-                deletions: diff.deletions,
-            });
-        }
-
         return result;
+    }
+
+    apply(task: AITask, result: AITaskResult): void {
+        this.applyChange(task.targetFile, result.updatedContent);
+
+        const changeId = uuidv4();
+        this.history.record({
+            id: changeId,
+            sessionId: this.sessionId,
+            taskId: task.id,
+            filePath: task.targetFile,
+            originalContent: result.originalContent,
+            updatedContent: result.updatedContent,
+            diff: result.diff,
+            appliedAt: Date.now(),
+            provider: this.provider.kind,
+            confidence: result.confidence,
+        });
+
+        result.appliedAt = Date.now();
+        logger.info('Change applied', {
+            file: task.targetFile,
+            confidence: result.confidence,
+        });
     }
 
     private readFile(filePath: string): string {

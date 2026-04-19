@@ -87,14 +87,15 @@ Respond with JSON:
 }`;
 
         try {
-            const response = await this.provider.complete({
+            const result = await this.provider.execute({
+                taskType: 'analysis',
+                priority: 'medium',
+                context: userPrompt,
                 systemPrompt,
-                userPrompt,
-                temperature: 0.1,
-                responseFormat: 'json',
+                maxTokens: 1000,
             });
 
-            const parsed = extractJSONFromAIOutput(response.content) as {
+            const parsed = extractJSONFromAIOutput(result.content) as {
                 needsUpdate: boolean;
                 description: string;
                 constraints: string[];

@@ -34,7 +34,8 @@ export type EdgeKind =
     | 'references'
     | 'api_uses'
     | 'db_uses'
-    | 'renders';
+    | 'renders'
+    | 'tests';
 
 export type Layer = 'database' | 'backend' | 'api' | 'frontend' | 'config' | 'infrastructure';
 
@@ -171,19 +172,104 @@ export interface CrossLayerIssue {
     autoFixable?: boolean;
 }
 
-// ─── AI Provider Types ────────────────────────────────────────────────────────
+// ─── Diagnostic & Failure Types ──────────────────────────────────────────────
+
+export interface Diagnostic {
+    file: string;
+    line: number;
+    column: number;
+    message: string;
+    code?: string;
+    severity: 'error' | 'warning';
+    tool: string;
+    metadata?: Record<string, any>;
+}
+
+export interface DiagnosticReport {
+    errors: Diagnostic[];
+    warnings: Diagnostic[];
+    tool: string;
+    durationMs: number;
+}
+
+export type FailureCategory = 'ai_timeout' | 'test_regression' | 'parse_error' | 'permission_denied' | 'model_outage' | 'runtime_crash' | 'interface_mismatch' | 'logic_drift';
+
+export interface FailureSnapshot {
+    id: string;
+    category: FailureCategory;
+    filePath: string;
+    message: string;
+    stackTrace?: string;
+    contextBefore: string;
+    timestamp: number;
+    frequency: number;
+}
+
+export interface Hypothesis {
+    id: string;
+    description: string;
+    logicLines: string;
+    confidence: number;
+    impactLevel: 'local' | 'systemic';
+    score?: number;
+}
+
+export interface RootCauseReport {
+    failureId: string;
+    primaryCause: string;
+    analyzedFiles: string[];
+    hypotheses: Hypothesis[];
+    chosenSolutionId?: string;
+    temporalContext: { hash: string; date: string; message: string }[];
+}
+
+export interface StaticFixRule {
+    id: string;
+    tool: string;
+    code?: string;
+    messagePattern: string; // regex string
+    description: string;
+}
+
+
+// ─── AI Orchestration Types ──────────────────────────────────────────────────
+
+export type TaskType = 'simple' | 'analysis' | 'reasoning' | 'design';
+
+export interface ModelRequest {
+    taskType: TaskType;
+    priority: 'low' | 'medium' | 'high';
+    context: string;
+    systemPrompt?: string;
+    maxTokens: number;
+    temperature?: number;
+    filePath?: string;
+    modelOverride?: string;
+}
+
+export interface ModelResponse {
+    content: string;
+    usage: {
+        promptTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+    };
+    provider: string;
+    model: string;
+    cached?: boolean;
+}
 
 export type AIProviderKind = 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'ollama';
 
 export interface AIProvider {
     kind: AIProviderKind;
-    complete(request: AICompletionRequest): Promise<AICompletionResponse>;
-    completeStream?(request: AICompletionRequest, onToken: (token: string) => void): Promise<AICompletionResponse>;
+    execute(request: ModelRequest): Promise<ModelResponse>;
     embed?(text: string): Promise<number[]>;
     batchEmbed?(texts: string[]): Promise<number[][]>;
-    isAvailable(): Promise<boolean>;
     listModels?(): Promise<string[]>;
+    isAvailable(): Promise<boolean>;
 }
+
 
 export interface AICompletionRequest {
     systemPrompt: string;

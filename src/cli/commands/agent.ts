@@ -42,7 +42,8 @@ export function agentCommand(): Command {
 
             const agent = new AgentLoop(aiProvider, config.rootDir, db, sessionId, graph, store);
 
-            const result = await agent.run(actualTask, async (step, action, toolResult, tasklist) => {
+            const result = await agent.run(actualTask, {
+                onStep: async (step: number, action: any, toolResult: any, tasklist: string[]) => {
                 stepCount = step;
                 
                 if (step === 1 && (action as any).tool !== 'thinking') {
@@ -61,7 +62,7 @@ export function agentCommand(): Command {
                     console.log(chalk.bold('Codebase OS — Principal Dashboard'));
                     console.log(chalk.gray('─'.repeat(40)));
                     console.log(chalk.bold('📋 Tasklist:'));
-                    tasklist.forEach(t => {
+                    tasklist.forEach((t: string) => {
                         if (t.includes('(done)') || t.includes('✔')) console.log(`  ${chalk.green('✔')} ${chalk.gray(t)}`);
                         else if (t.includes('(in progress)') || t.includes('➤')) console.log(`  ${chalk.yellow('➤')} ${chalk.bold(t)}`);
                         else console.log(`  ${chalk.gray('○')} ${t}`);
@@ -95,7 +96,7 @@ export function agentCommand(): Command {
                     if (argSummary) console.log(chalk.gray(`  Target: ${argSummary}`));
                     console.log(chalk.green(`  Result: SUCCESS`));
                 }
-            });
+            }});
 
             spinner?.stop();
 

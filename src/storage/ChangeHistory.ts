@@ -61,6 +61,13 @@ export class ChangeHistory {
         return rows.map(r => this.rowToRecord(r));
     }
 
+    getLatestForFile(filePath: string): ChangeRecord | null {
+        const row = this.db.prepare(
+            'SELECT * FROM change_records WHERE file_path = ? AND rolled_back = 0 ORDER BY applied_at DESC LIMIT 1'
+        ).get(filePath) as ChangeRow | undefined;
+        return row ? this.rowToRecord(row) : null;
+    }
+
     getRecent(limit = 20): ChangeRecord[] {
         const rows = this.db.prepare(
             'SELECT * FROM change_records ORDER BY applied_at DESC LIMIT ?'

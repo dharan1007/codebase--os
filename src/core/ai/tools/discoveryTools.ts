@@ -11,6 +11,9 @@ import type { ToolResult } from './localTools.js';
  */
 
 export async function searchCodeTool(query: string, rootDir: string): Promise<ToolResult> {
+    if (!query || !query.trim()) {
+        return { success: true, output: 'No search pattern provided. Please specify a string to find.' };
+    }
     try {
         // 1. Try Windows-native search with clean PowerShell (Escaped)
         const escapedQuery = query.replace(/'/g, "''");
@@ -19,10 +22,11 @@ export async function searchCodeTool(query: string, rootDir: string): Promise<To
         // 1. Filter out reserved Windows devices (NUL, CON, etc.)
         // 2. Exclude heavy directories (node_modules, build, dist, .git, etc.) to drastically reduce IO lag.
         const excludeDirs = 'node_modules,build,dist,.git,.cos,.dart_tool,ios,android,coverage,bin,obj';
-        const cmd = `PowerShell -NoProfile -Command "Get-ChildItem -Recurse -File -Exclude NUL,CON,PRN,AUX,COM1,COM2,COM3,COM4,COM5,COM6,COM7,COM8,COM9,LPT1,LPT2,LPT3,LPT4,LPT5,LPT6,LPT7,LPT8,LPT9 | Where-Object { \\"$($_.FullName)\\" -notmatch '(${excludeDirs.replace(/,/g, '|')})' } | Select-String -Pattern '${escapedQuery}' | Select-Object -First 50 | ForEach-Object { \\"$($_.Filename):$($_.LineNumber): $($_.Line.Trim())\\" }"`;
+        // Improved command with error suppression and clearer path matching
+        const cmd = `PowerShell -NoProfile -Command "Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue -Exclude NUL,CON,PRN,AUX,COM1,COM2,COM3,COM4,COM5,COM6,COM7,COM8,COM9,LPT1,LPT2,LPT3,LPT4,LPT5,LPT6,LPT7,LPT8,LPT9 | Where-Object { \\"$($_.FullName)\\" -notmatch '(${excludeDirs.replace(/,/g, '|')})' } | Select-String -Pattern '${escapedQuery}' -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object { \\"$($_.Filename):$($_.LineNumber): $($_.Line.Trim())\\" }"`;
         
         try {
-            const output = execSync(cmd, { cwd: rootDir, encoding: 'utf8', timeout: 10000 });
+            const output = execSync(cmd, { cwd: rootDir, encoding: 'utf8', timeout: 15000 });
             if (output.trim()) {
                 return { success: true, output: output.trim() };
             }
@@ -33,7 +37,7 @@ export async function searchCodeTool(query: string, rootDir: string): Promise<To
         // 2. Failure-Proof Native Fallback (Node.js)
         return await searchCodeNative(query, rootDir);
     } catch (err) {
-        return { success: false, output: '', error: String(err) };
+        return { success: false, output: '', error: `Search failed: ${String(err)}` };
     }
 }
 

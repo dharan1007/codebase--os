@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import type { AIProvider, AICompletionRequest, AICompletionResponse, AIProviderKind } from '../../../types/index.js';
+import type { AIProvider, ModelRequest, ModelResponse, AIProviderKind } from '../../../types/index.js';
 import { logger } from '../../../utils/logger.js';
 import { RateLimiter } from '../../../utils/RateLimiter.js';
 
@@ -23,38 +23,36 @@ export class OpenAIProvider implements AIProvider {
         });
     }
 
-    async complete(request: AICompletionRequest): Promise<AICompletionResponse> {
+    async execute(request: ModelRequest): Promise<ModelResponse> {
         return this.limiter.execute(async () => {
-            const model = request.model ?? this.defaultModel;
+            const model = request.modelOverride ?? this.defaultModel;
 
-        try {
-            const response = await this.client.chat.completions.create({
-                model,
-                messages: [
-                    { role: 'system', content: request.systemPrompt },
-                    { role: 'user', content: request.userPrompt },
-                ],
-                temperature: request.temperature ?? 0.2,
-                max_tokens: request.maxTokens ?? 4096,
-                response_format: request.responseFormat === 'json'
-                    ? { type: 'json_object' }
-                    : { type: 'text' },
-            });
+            try {
+                const response = await this.client.chat.completions.create({
+                    model,
+                    messages: [
+                        { role: 'system', content: request.systemPrompt ?? 'You are a helpful assistant.' },
+                        { role: 'user', content: request.context },
+                    ],
+                    temperature: request.temperature ?? 0.2,
+                    max_tokens: request.maxTokens,
+                });
 
-            const content = response.choices[0]?.message?.content ?? '';
-            return {
-                content,
-                model,
-                usage: {
-                    inputTokens: response.usage?.prompt_tokens ?? 0,
-                    outputTokens: response.usage?.completion_tokens ?? 0,
-                },
-                provider: this.kind,
-            };
-        } catch (err) {
-            logger.error('OpenAI completion failed', { error: String(err) });
-            throw err;
-        }
+                const content = response.choices[0]?.message?.content ?? '';
+                return {
+                    content,
+                    usage: {
+                        promptTokens: response.usage?.prompt_tokens ?? 0,
+                        outputTokens: response.usage?.completion_tokens ?? 0,
+                        totalTokens: response.usage?.total_tokens ?? 0,
+                    },
+                    provider: this.kind,
+                    model,
+                };
+            } catch (err) {
+                logger.error('OpenAI execution failed', { error: String(err) });
+                throw err;
+            }
         });
     }
 

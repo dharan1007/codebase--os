@@ -201,4 +201,62 @@ export class TypeScriptAnalyzer {
 
         return breaks;
     }
+
+    buildCallGraph(): Array<{ sourceFile: string; callerName: string; calleeName: string; targetFile?: string }> {
+        const calls: Array<{ sourceFile: string; callerName: string; calleeName: string; targetFile?: string }> = [];
+        const languageService = this.project.getLanguageService();
+
+        for (const sf of this.project.getSourceFiles()) {
+            const filePath = sf.getFilePath();
+            
+            const callExpressions = sf.getDescendantsOfKind(SyntaxKind.CallExpression);
+            for (const callExpr of callExpressions) {
+                try {
+                    const expr = callExpr.getExpression();
+                    let calleeName = '';
+                    
+                    if (Node.isIdentifier(expr)) {
+                        calleeName = expr.getText();
+                    } else if (Node.isPropertyAccessExpression(expr)) {
+                        calleeName = expr.getName();
+                    } else {
+                        continue;
+                    }
+
+                    const callerFunc = callExpr.getFirstAncestorByKind(SyntaxKind.FunctionDeclaration) ||
+                                       callExpr.getFirstAncestorByKind(SyntaxKind.MethodDeclaration) ||
+                                       callExpr.getFirstAncestorByKind(SyntaxKind.ArrowFunction);
+                    let callerName = '(anonymous)';
+                    if (callerFunc) {
+                        if (Node.isFunctionDeclaration(callerFunc) || Node.isMethodDeclaration(callerFunc)) {
+                            callerName = callerFunc.getName() || '(anonymous)';
+                        } else if (Node.isArrowFunction(callerFunc)) {
+                            const varDecl = callerFunc.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
+                            if (varDecl) {
+                                callerName = varDecl.getName();
+                            }
+                        }
+                    } else {
+                        callerName = '(top_level)';
+                    }
+
+                    const typeChecker = this.project.getTypeChecker();
+                    const symbol = typeChecker.getSymbolAtLocation(expr);
+                    let targetFile: string | undefined;
+                    
+                    if (symbol) {
+                        const decls = symbol.getDeclarations();
+                        if (decls && decls.length > 0) {
+                            targetFile = decls[0].getSourceFile()?.getFilePath();
+                        }
+                    }
+
+                    calls.push({ sourceFile: filePath, callerName, calleeName, targetFile });
+                } catch {
+                    // Ignore errors during node resolution
+                }
+            }
+        }
+        return calls;
+    }
 }

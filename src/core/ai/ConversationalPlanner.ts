@@ -39,47 +39,37 @@ export class ConversationalPlanner {
 
         const fileContext = relevantFiles.join('\n') || '(no files found)';
 
-        const planningPrompt = {
-            systemPrompt: `You are an elite Senior Principal Engineer. 
+        const result = await this.provider.execute({
+            taskType: 'analysis',
+            priority: 'medium',
+            context: `Developer request: "${request}"\n\nProject root: ${rootDir}\n${graphContextBlock}\n\nFILES:\n${fileContext}`,
+            systemPrompt: `You are the Sovereign Principal Engineer of Codebase OS. 
 
-Determine if the request is an ENGINEERING INQUIRY or a CODE CHANGE.
+Your goal is to guide the user through codebase evolutions with elite technical precision and a sophisticated, helpful tone.
 
-QUALITY STANDARDS:
-- If an INQUIRY: Provide a deep technical analysis. Reference specific files/nodes.
-- If a CHANGE: Define surgical, production-ready tasks.
+- If the user asks a question (inquiry), provide a deep, elegant "answer".
+- If the user requests a change, generate a structured list of "tasks".
+- ALWAYS respond with ONLY valid JSON.
 
 JSON SCHEMA:
 {
-  "summary": "headline",
-  "answer": "string (Deep Analysis)",
+  "summary": "Elegant headline of the plan or answer",
+  "answer": "Cohesive, principal-grade explanation or analysis",
   "tasks": []
 }`,
-            userPrompt: `Developer request: "${request}"
-
-Project root: ${rootDir}
-${graphContextBlock}
-
-FILES:
-${fileContext}
-
-Respond with ONLY valid JSON.`,
-            temperature: 0.2,
             maxTokens: 1500,
-            responseFormat: 'json' as const, // Cast to fix TS type error
-        };
-
-        const planningResponse = await this.provider.complete(planningPrompt);
+        });
 
         try {
             let parsed: any;
             try {
-                parsed = extractJSONFromAIOutput(planningResponse.content);
+                parsed = extractJSONFromAIOutput(result.content);
             } catch (e) {
                 logger.warn('JSON extraction failed, falling back to raw answer', { error: String(e) });
                 return {
                     tasks: [],
                     summary: 'Direct Text Response',
-                    answer: planningResponse.content,
+                    answer: result.content,
                     affectedFiles: [],
                     canCreateFiles: false,
                     estimatedEffort: 'small'
@@ -128,7 +118,7 @@ Respond with ONLY valid JSON.`,
             };
         } catch (err) {
             logger.error('Final planning fallback failed', { error: String(err) });
-            return { tasks: [], summary: 'Planning failed', answer: planningResponse.content, affectedFiles: [], canCreateFiles: false, estimatedEffort: 'small' };
+            return { tasks: [], summary: 'Planning failed', answer: result.content, affectedFiles: [], canCreateFiles: false, estimatedEffort: 'small' };
         }
     }
 

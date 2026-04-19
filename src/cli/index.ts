@@ -24,6 +24,7 @@ import { deployCommand } from './commands/deploy.js';
 import { fixCommand } from './commands/fix.js';
 import { agentCommand } from './commands/agent.js';
 import { infoCommand } from './commands/info.js';
+import { serveCommand } from './commands/serve.js';
 
 dotenv.config({ path: path.join(process.cwd(), '.env') });
 
@@ -56,6 +57,8 @@ ${chalk.bold('Operations:')}
   ${chalk.cyan('cos history')}                       View history of AI changes
   ${chalk.cyan('cos env check')}                     Check runtimes, ports, Docker
   ${chalk.cyan('cos info')}                          Show project guide and credits
+  ${chalk.cyan('cos serve')}                         Start the Visual UI Dashboard
+
 `);
 
 program.addCommand(initCommand());
@@ -78,6 +81,7 @@ program.addCommand(deployCommand());
 program.addCommand(fixCommand());
 program.addCommand(continueCommand());
 program.addCommand(infoCommand());
+program.addCommand(serveCommand());
 
 // Handle Ctrl+C gracefully
 process.on('SIGINT', () => {

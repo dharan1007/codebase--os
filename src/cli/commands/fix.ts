@@ -7,11 +7,15 @@ import { loadContext } from '../context.js';
 import { AIProviderFactory } from '../../core/ai/AIProviderFactory.js';
 import { ChangeExecutor } from '../../core/ai/ChangeExecutor.js';
 import { ErrorDetector } from '../../core/diagnostics/ErrorDetector.js';
-import { PermissionGate } from '../../core/permissions/PermissionGate.js';
+import { DecisionEngine } from '../../core/ai/DecisionEngine.js';
 import type { AITask } from '../../types/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../utils/logger.js';
 import { RichFormatter } from '../../core/output/RichFormatter.js';
+import { StaticPatternLibrary } from '../../core/diagnostics/StaticPatternLibrary.js';
+import { FailureManager } from '../../core/diagnostics/FailureManager.js';
+import { FailureStore } from '../../core/failure/FailureStore.js';
+import { TestRunner } from '../../core/diagnostics/TestRunner.js';
 
 export function fixCommand(): Command {
     return new Command('fix')
@@ -25,7 +29,7 @@ export function fixCommand(): Command {
             const ctx = await loadContext();
             if (!ctx) return;
 
-            const { config, history, sessionId } = ctx;
+            const { config, history, sessionId, graph, db } = ctx;
 
             let provider;
             try {
@@ -36,10 +40,7 @@ export function fixCommand(): Command {
             }
 
             const detector = new ErrorDetector(config.rootDir);
-            const gate = new PermissionGate({
-                autoApprove: opts.yes as boolean,
-                logFile: `${config.dataDir ?? '.cos'}/permissions.log`,
-            });
+            const decisionEngine = new DecisionEngine(graph);
 
             // Step 1 — Run diagnostics
             const spinnerScan = ora('Running diagnostics...').start();
@@ -64,72 +65,115 @@ export function fixCommand(): Command {
             console.log(chalk.bold('Diagnostic Report:'));
             console.log(RichFormatter.formatDiagnostics(reports, config.rootDir));
 
-            // Step 3 — Request permission
             const byFile = detector.groupByFile(reports);
-            const affectedFiles = Array.from(byFile.keys()).map(f => path.relative(config.rootDir, f));
-            const allowed = await gate.requestPermission({
-                action: 'AI Auto-Fix',
-                description: `Use AI to fix errors in ${byFile.size} file(s)`,
-                affectedFiles,
-                riskLevel: byFile.size > 5 ? 'medium' : 'low',
-                isDestructive: false,
-                canUndo: true,
-            });
 
-            if (!allowed) {
-                console.log(chalk.yellow('\nFix cancelled.'));
-                return;
-            }
-
-            // Step 4 — Build and execute AI tasks
+            // Step 3 — Build and execute fixing pipeline
             const executor = new ChangeExecutor(provider, config, history, sessionId);
-            const results = [];
+            const patternLibrary = new StaticPatternLibrary(config.rootDir);
+            const failureStore = new FailureStore(db);
+            const failureManager = new FailureManager(db, history, failureStore);
+            const testRunner = new TestRunner(config.rootDir, graph);
+            failureManager.init();
 
-            for (const [filePath, diags] of byFile) {
-                const rel = path.relative(config.rootDir, filePath);
-                const errorSummary = diags
-                    .filter(d => d.severity === 'error')
-                    .map(d => `Line ${d.line}: [${d.code ?? d.tool}] ${d.message}`)
-                    .join('\n');
+            const concurrency = 3; // Lower concurrency for stability
+            const results: any[] = [];
+            const entries = Array.from(byFile.entries());
 
-                if (!errorSummary) continue;
+            // Process files in batches to respect concurrency
+            for (let i = 0; i < entries.length; i += concurrency) {
+                const chunk = entries.slice(i, i + concurrency);
+                await Promise.all(chunk.map(async ([filePath, diags]) => {
+                    const rel = path.relative(config.rootDir, filePath);
+                    const errorSummary = diags
+                        .filter(d => d.severity === 'error')
+                        .map(d => `Line ${d.line}: [${d.code ?? d.tool}] ${d.message}`)
+                        .join('\n');
 
-                const task: AITask = {
-                    id: uuidv4(),
-                    kind: 'fix',
-                    description: `Fix ${diags.filter(d => d.severity === 'error').length} error(s) in this file`,
-                    targetFile: filePath,
-                    context: `The following errors were detected by static analysis:\n${errorSummary}`,
-                    constraints: [
-                        'Fix ONLY the listed errors — do not change unrelated code',
-                        'Maintain existing code style, imports, and structure',
-                        'Do not add new dependencies',
-                        'Ensure the file remains syntactically valid after the fix',
-                    ],
-                    expectedOutput: 'The same file with all listed errors resolved',
-                    priority: 10,
-                };
+                    if (!errorSummary) return;
 
-                const spinner = ora(`Fixing: ${rel}`).start();
-                try {
-                    const result = await executor.execute(task, opts.dryRun as boolean ?? false);
-                    results.push({ result, filePath });
+                    const spinner = ora(`Processing: ${rel}`).start();
+                    
+                    try {
+                        // Stage 1: Static Pattern Fixes
+                        let fixedByPattern = false;
+                        if (!opts.dryRun) {
+                            for (const diag of diags) {
+                                if (await patternLibrary.applyFix(diag)) {
+                                    fixedByPattern = true;
+                                }
+                            }
+                        }
 
-                    if (!result.success) {
-                        spinner.fail(`Failed: ${result.validationErrors.slice(0, 1).join(', ')}`);
-                    } else if (result.confidence < 0.5) {
-                        spinner.warn(`Applied with low confidence (${(result.confidence * 100).toFixed(0)}%) — review manually`);
-                    } else {
-                        spinner.succeed(`Fixed — ${(result.confidence * 100).toFixed(0)}% confidence`);
+                        if (fixedByPattern) {
+                            spinner.text = `Applied static fixes: ${rel}`;
+                        }
+
+                        // Stage 2: AI Fixes
+                        const task: AITask = {
+                            id: uuidv4(),
+                            kind: 'fix',
+                            description: `Fix ${diags.filter(d => d.severity === 'error').length} error(s) in this file`,
+                            targetFile: filePath,
+                            context: `The following errors were detected by static analysis:\n${errorSummary}`,
+                            constraints: [
+                                'Fix ONLY the listed errors — do not change unrelated code',
+                                'Maintain existing code style, imports, and structure',
+                                'Do not add new dependencies',
+                                'Ensure the file remains syntactically valid after the fix',
+                            ],
+                            expectedOutput: 'The same file with all listed errors resolved',
+                            priority: 10,
+                        };
+
+                        const result = await executor.execute(task, opts.dryRun as boolean ?? false);
+
+                        if (!result.success) {
+                            spinner.fail(`AI Fix Failed: ${rel}`);
+                            await failureManager.handleFailure('parse_error', filePath, result.validationErrors.join('\n'));
+                            results.push({ result, filePath });
+                            return;
+                        }
+
+                        spinner.stop();
+
+                        const diffLines = result.diff.split('\n').length;
+                        const evaluation = decisionEngine.evaluate('write_file', filePath, diffLines, result.confidence);
+                        const allowed = await decisionEngine.enforce('AI Auto-Fix', filePath, evaluation);
+
+                        if (allowed && !opts.dryRun) {
+                            executor.apply(task, result);
+                            
+                            // Stage 3: Semantic Validation & Partial Tests
+                            const reVerify = await detector.runAll([filePath]);
+                            const newErrors = reVerify.reduce((acc, r) => acc + r.errors.length, 0);
+                            
+                            if (newErrors > 0) {
+                                await failureManager.handleFailure('parse_error', filePath, `Found ${newErrors} regressions after fix.`);
+                                result.success = false;
+                            } else {
+                                // Run impacted tests
+                                const testResults = await testRunner.runImpactedTests(filePath);
+                                const failures = testResults.filter(t => !t.success);
+                                
+                                if (failures.length > 0) {
+                                    const details = failures.map(f => `${f.testFile}: ${f.output}`).join('\n');
+                                    await failureManager.handleFailure('test_regression', filePath, details);
+                                    result.success = false;
+                                } else {
+                                    console.log(chalk.green(`  ✔ Fixed ${rel} — Verification passed`));
+                                }
+                            }
+                        } else if (!allowed) {
+                            console.log(chalk.yellow(`  Skipped: ${rel}`));
+                            result.success = false;
+                        }
+
+                        results.push({ result, filePath });
+                    } catch (err) {
+                        spinner.fail(`Error: ${rel} - ${String(err)}`);
+                        logger.error('fix task failed', { file: filePath, error: String(err) });
                     }
-
-                    if (result.success && opts.dryRun && result.diff) {
-                        console.log(RichFormatter.formatDiff(result.diff));
-                    }
-                } catch (err) {
-                    spinner.fail(`Error: ${String(err)}`);
-                    logger.error('fix task failed', { file: filePath, error: String(err) });
-                }
+                }));
             }
 
             // Step 5 — Summary
@@ -147,7 +191,7 @@ export function fixCommand(): Command {
             // Step 6 — Re-verify (optional)
             if (!opts.noVerify && applied.length > 0) {
                 console.log('');
-                const recheck = ora('Re-running diagnostics to verify fixes...').start();
+                const recheck = ora('Re-running global verification...').start();
                 try {
                     const fixedFiles = applied.map(r => r.filePath);
                     const recheckReports = await detector.runAll(fixedFiles);
@@ -163,3 +207,4 @@ export function fixCommand(): Command {
             }
         });
 }
+

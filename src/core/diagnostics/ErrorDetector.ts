@@ -2,23 +2,9 @@ import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { logger } from '../../utils/logger.js';
+import type { Diagnostic, DiagnosticReport } from '../../types/index.js';
 
-export interface Diagnostic {
-    file: string;
-    line: number;
-    column: number;
-    message: string;
-    code?: string;
-    severity: 'error' | 'warning';
-    tool: string;
-}
 
-export interface DiagnosticReport {
-    errors: Diagnostic[];
-    warnings: Diagnostic[];
-    tool: string;
-    durationMs: number;
-}
 
 export class ErrorDetector {
     constructor(private rootDir: string) {}

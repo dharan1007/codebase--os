@@ -25,14 +25,15 @@ export class AISummaryGenerator {
         }
 
         try {
-            const response = await this.provider.complete({
+            const result = await this.provider.execute({
+                taskType: 'analysis',
+                priority: 'low',
+                context: PromptTemplates.impactSummary(report),
                 systemPrompt: PromptTemplates.systemImpactAnalyzer(),
-                userPrompt: PromptTemplates.impactSummary(report),
-                temperature: 0.1,
-                responseFormat: 'json',
+                maxTokens: 1000,
             });
 
-            const parsed = extractJSONFromAIOutput(response.content) as ImpactSummary;
+            const parsed = extractJSONFromAIOutput(result.content) as ImpactSummary;
             return {
                 headline: parsed.headline ?? 'Impact analysis complete',
                 keyRisks: parsed.keyRisks ?? [],
@@ -49,16 +50,18 @@ export class AISummaryGenerator {
         if (report.issues.length === 0) return 'All layers are synchronized.';
 
         try {
-            const response = await this.provider.complete({
-                systemPrompt: PromptTemplates.systemImpactAnalyzer(),
-                userPrompt: `Summarize these cross-layer sync issues in 2-3 sentences for a developer:
+            const result = await this.provider.execute({
+                taskType: 'analysis',
+                priority: 'low',
+                context: `Summarize these cross-layer sync issues in 2-3 sentences for a developer:
 ${report.summary}
 Issues: ${report.issues.map(i => `${i.kind}: ${i.description}`).join('; ')}`,
-                temperature: 0.2,
+                systemPrompt: PromptTemplates.systemImpactAnalyzer(),
+                maxTokens: 500,
             });
-            return response.content.trim();
+            return result.content.trim();
         } catch {
             return report.summary;
         }
     }
-}
+}

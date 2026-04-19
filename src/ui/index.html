@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Codebase OS — Sovereign AI Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@600;700;800;900&family=Fira+Code&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --color-primary: #8b5cf6;
+            --color-secondary: #ec4899;
+            --color-accent: #06b6d4;
+            --color-bg: #020617;
+            --color-surface: rgba(15, 23, 42, 0.6);
+            --color-text: #f8fafc;
+            --color-text-muted: #94a3b8;
+            --color-error: #f43f5e;
+            --color-success: #10b981;
+            --radius-soft: 20px;
+            --shadow-glow: 0 0 50px rgba(139, 92, 246, 0.2);
+            --shadow-inner: inset 0 2px 10px rgba(0, 0, 0, 0.3);
+            --font-display: 'Outfit', sans-serif;
+            --font-body: 'Inter', sans-serif;
+            --font-mono: 'Fira Code', monospace;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--color-bg);
+            color: var(--color-text);
+            font-family: var(--font-body);
+            overflow: hidden;
+            height: 100vh;
+            background: 
+                radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 100% 100%, rgba(6, 182, 212, 0.1) 0%, transparent 50%);
+        }
+
+        #app-root {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            height: 100vh;
+        }
+
+        /* Sovereign Sidebar */
+        aside {
+            background: rgba(2, 6, 23, 0.9);
+            border-right: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 3rem 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 3rem;
+            backdrop-filter: blur(40px);
+        }
+
+        .logo-container {
+            position: relative;
+        }
+
+        .logo {
+            font-family: var(--font-display);
+            font-size: 2rem;
+            font-weight: 900;
+            letter-spacing: -0.05em;
+            background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-transform: uppercase;
+        }
+
+        .logo-sub {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.3em;
+            color: var(--color-text-muted);
+            margin-top: -5px;
+        }
+
+        /* Main Viewport */
+        main {
+            padding: 4rem;
+            display: flex;
+            flex-direction: column;
+            gap: 2.5rem;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .hero-section {
+            animation: fadeIn 1s ease-out;
+        }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        h1 {
+            font-family: var(--font-display);
+            font-size: 4.5rem;
+            font-weight: 900;
+            line-height: 0.9;
+            letter-spacing: -0.04em;
+            margin-bottom: 1rem;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.6rem 1.2rem;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--color-success);
+            border-radius: 100px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            text-transform: uppercase;
+            margin-bottom: 1.5rem;
+        }
+
+        /* High-Fidelity Dashboard Cards */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2rem;
+        }
+
+        .card {
+            background: var(--color-surface);
+            backdrop-filter: blur(30px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: var(--radius-soft);
+            padding: 2.5rem;
+            transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+        }
+
+        .card:hover {
+            transform: scale(1.02) translateY(-5px);
+            border-color: var(--color-primary);
+            box-shadow: var(--shadow-glow);
+            background: rgba(30, 41, 59, 0.8);
+        }
+
+        .card-title {
+            font-family: var(--font-display);
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--color-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 1rem;
+        }
+
+        .stat-value {
+            font-family: var(--font-display);
+            font-size: 3.5rem;
+            font-weight: 800;
+            line-height: 1;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--color-text-muted);
+        }
+
+        /* Visual Reasoning System */
+        .reasoning-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+
+        .terminal-container {
+            background: #000;
+            border-radius: var(--radius-soft);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 2rem;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.6;
+            height: 350px;
+            overflow-y: auto;
+            box-shadow: var(--shadow-inner);
+        }
+
+        .terminal-header {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        .dot { width: 8px; height: 8px; border-radius: 50%; }
+        .red { background: #ff5f56; }
+        .yellow { background: #ffbd2e; }
+        .green { background: #27c93f; }
+
+        .line-add { color: var(--color-success); }
+        .line-system { color: var(--color-primary); opacity: 0.8; }
+        .line-meta { color: var(--color-text-muted); }
+
+        /* Dynamic Glow Blobs */
+        .glow-blob {
+            position: absolute;
+            width: 800px;
+            height: 800px;
+            background: radial-gradient(circle, var(--color-primary), transparent 70%);
+            filter: blur(120px);
+            opacity: 0.05;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        #blob-1 { top: -200px; right: -200px; }
+        #blob-2 { bottom: -200px; left: -200px; }
+
+        .cursor {
+            display: inline-block;
+            width: 8px;
+            height: 1em;
+            background: var(--color-primary);
+            animation: blink 1s infinite steps(2);
+            margin-left: 5px;
+        }
+
+        @keyframes blink { 0% { opacity: 0; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div id="app-root">
+        <!-- Floating Glow -->
+        <div id="blob-1" class="glow-blob"></div>
+        <div id="blob-2" class="glow-blob"></div>
+
+        <aside>
+            <div class="logo-container">
+                <div class="logo">Codebase OS</div>
+                <div class="logo-sub">Sovereign Edition v1.2</div>
+            </div>
+            
+            <div style="margin-top: auto;">
+                <div style="font-size: 0.65rem; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.2em; margin-bottom: 1rem;">ACTIVE INSTANCE</div>
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="width: 40px; height: 40px; background: linear-gradient(135deg, #1e293b, #0f172a); border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);"></div>
+                    <div>
+                        <div style="font-weight: 600; font-size: 0.9rem;">Dharan AI</div>
+                        <div style="font-size: 0.75rem; color: var(--color-success);">Principal Connected</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <main>
+            <div class="hero-section">
+                <div class="status-badge" id="monitor-badge">● INFRASTRUCTURE NOMINAL</div>
+                <h1>Intelligence<br>Redefined</h1>
+            </div>
+
+            <div class="dashboard-grid">
+                <div class="card stagger-item">
+                    <div class="card-title">Failure Store</div>
+                    <div class="stat-value" style="color: var(--color-error)">14</div>
+                    <div class="stat-label">Recurring anomalies detected and prioritized.</div>
+                </div>
+                <div class="card stagger-item">
+                    <div class="card-title">Compute Budget</div>
+                    <div class="stat-value" style="color: var(--color-accent)">$0.85</div>
+                    <div class="stat-label">Projected monthly optimization: 64%.</div>
+                </div>
+                <div class="card stagger-item">
+                    <div class="card-title">Code Health</div>
+                    <div class="stat-value" style="color: var(--color-success)">98%</div>
+                    <div class="stat-label">Sovereign Graph reflects 0 critical debt nodes.</div>
+                </div>
+            </div>
+
+            <div class="reasoning-grid">
+                <div class="card stagger-item" style="padding: 0; display: flex; flex-direction: column;">
+                    <div style="padding: 2.5rem 2.5rem 1rem 2.5rem;">
+                        <div class="card-title">Active Reasoning</div>
+                        <p style="font-size: 0.95rem; color: var(--color-text-muted); line-height: 1.6;">
+                            The Principal Assistant is currently neutralizing structural inconsistencies in the AI Orchestration layer.
+                        </p>
+                    </div>
+                    <div class="terminal-container" style="background: transparent; border-top: 1px solid rgba(255,255,255,0.05); height: 100%; box-shadow: none;">
+                        <div class="line-system">[PLANNER] Constructing impact-aware graph...</div>
+                        <div class="line-system">[ROUTER] Selecting LLM: Claude 3.5 Sonnet...</div>
+                        <div class="line-meta">[GRAPH] Analyzing imports in src/core/ai...</div>
+                        <div class="line-meta">[GRAPH] Detected 14 candidate nodes for refactoring.</div>
+                        <div class="line-add">[RESOLVE] Applied Sovereign logic to ModelRouter.ts</div>
+                        <div class="line-system">[STATUS] Optimization cycle complete. <span class="cursor"></span></div>
+                    </div>
+                </div>
+
+                <div class="card stagger-item" style="padding: 0;">
+                    <div style="padding: 2.5rem 2.5rem 1rem 2.5rem;">
+                        <div class="card-title">Impact Visualization</div>
+                    </div>
+                    <div class="terminal-container" style="background: #000; border-radius: 0 0 20px 20px; border: none;">
+                        <div class="terminal-header">
+                            <div class="dot red"></div>
+                            <div class="dot yellow"></div>
+                            <div class="dot green"></div>
+                        </div>
+                        <div class="line-meta">// diff src/core/ai/ModelRouter.ts</div>
+                        <div>- private defaultChain: string[]</div>
+                        <div class="line-add">+ private userPreferredChain: ProviderSelection[]</div>
+                        <div>  </div>
+                        <div class="line-meta">// diff src/ui/index.html</div>
+                        <div class="line-add">+ background: var(--color-bg);</div>
+                        <div class="line-add">+ backdrop-filter: blur(40px);</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Animation & Interactions -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script>
+        // High-end stagger entrance
+        gsap.from('.stagger-item', {
+            duration: 1.2,
+            opacity: 0,
+            y: 40,
+            stagger: 0.15,
+            ease: 'expo.out',
+            delay: 0.3
+        });
+
+        gsap.from('h1', {
+            duration: 1.8,
+            opacity: 0,
+            x: -40,
+            ease: 'power4.out'
+        });
+
+        // Sophisticated mouse interaction
+        document.addEventListener('mousemove', (e) => {
+            const centerX = window.innerWidth / 2;
+            const centerY = window.innerHeight / 2;
+            const moveX = (e.clientX - centerX) / 40;
+            const moveY = (e.clientY - centerY) / 40;
+
+            gsap.to('.glow-blob', {
+                duration: 2,
+                x: moveX * 2,
+                y: moveY * 2,
+                ease: 'power2.out'
+            });
+
+            gsap.to('main', {
+                duration: 2.5,
+                backgroundPosition: `${50 + (e.clientX / 100)}% ${50 + (e.clientY / 100)}%`,
+                ease: 'power1.out'
+            });
+        });
+    </script>
+</body>
+</html>

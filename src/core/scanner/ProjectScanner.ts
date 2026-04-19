@@ -11,6 +11,7 @@ import { contentHash, detectLanguage } from '../../utils/ast.js';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../utils/logger.js';
 import { normalizePath, resolveNormalized } from '../../utils/paths.js';
+import { EmbeddingIndex, type CodeChunk } from '../context/EmbeddingIndex.js';
 import ora from 'ora';
 import chalk from 'chalk';
 import type { AIProvider } from '../../types/index.js';
@@ -256,39 +257,64 @@ export class ProjectScanner {
             }
         });
 
-        // --- NEW: Semantic Indexing (Vector Embeddings) ---
-        if (this.aiProvider?.batchEmbed) {
-            spinner.text = 'Generating semantic embeddings (Vector RAG)...';
-            const nodesToEmbed = Array.from(this.graph.nodes.values()).filter(n => 
-                n.kind !== 'package' && n.kind !== 'module'
-            );
-            
-            if (nodesToEmbed.length > 0) {
-                const total = nodesToEmbed.length;
-                let indexed = 0;
-                
-                // Prepare semantic descriptions for better retrieval
-                const texts = nodesToEmbed.map(n => {
-                    const relativePath = path.relative(this.rootDir, n.filePath);
-                    return `${n.kind} "${n.name}" in ${relativePath}\nSignature: ${n.signature || 'N/A'}\nDoc: ${n.docComment || 'N/A'}`;
-                });
-
-                try {
-                    // Use RateLimiter.withRetry for industrial-grade stability
-                    await RateLimiter.withRetry(async () => {
-                        const embeddings = await this.aiProvider!.batchEmbed!(texts);
-                        for (let i = 0; i < nodesToEmbed.length; i++) {
-                            this.graphStore.updateNodeEmbedding(nodesToEmbed[i].id, embeddings[i]);
-                            indexed++;
-                            if (indexed % 10 === 0) {
-                                spinner.text = `Indexing semantic nodes: ${indexed}/${total}`;
-                            }
-                        }
-                    }, 3);
-                } catch (err) {
-                    logger.warn('Semantic indexing partially failed or skipped due to rate limits', { error: String(err) });
-                    errors.push({ file: '(global)', error: `Semantic indexing error: ${String(err)}` });
+        spinner.text = 'Resolving semantic relationships (calls/tests)...';
+        try {
+            const callGraph = this.tsAnalyzer.buildCallGraph();
+            this.db.transaction(() => {
+                for (const call of callGraph) {
+                    if (!call.targetFile) continue;
+                    
+                    const sourceNodes = this.graph.getNodesByFile(call.sourceFile);
+                    const targetNodes = this.graph.getNodesByFile(call.targetFile);
+                    
+                    const callerNode = sourceNodes.find(n => n.name === call.callerName || (n.kind === 'function' && n.name === call.callerName)) || sourceNodes.find(n => n.kind === 'file');
+                    const calleeNode = targetNodes.find(n => n.name === call.calleeName || (n.kind === 'function' && n.name === call.calleeName));
+                    
+                    if (callerNode && calleeNode) {
+                        try {
+                            const isTest = call.calleeName.includes('test') || call.callerName.includes('test') || call.sourceFile.includes('.test.') || call.sourceFile.includes('.spec.');
+                            this.graph.addEdge({
+                                kind: isTest ? 'tests' : 'calls',
+                                sourceId: callerNode.id,
+                                targetId: calleeNode.id,
+                                weight: 2,
+                                metadata: { caller: call.callerName, callee: call.calleeName },
+                            });
+                            edgesCreated++;
+                        } catch { /* skip */ }
+                    }
                 }
+            });
+        } catch (err) {
+            logger.warn('Failed to build semantic call graph', { error: String(err) });
+        }
+
+        // --- NEW: Semantic Indexing (Vector RAG via EmbeddingIndex) ---
+        if (this.aiProvider) {
+            spinner.text = 'Generating context embeddings (Vector RAG)...';
+            try {
+                const embeddingIndex = new EmbeddingIndex(this.db, this.aiProvider);
+                embeddingIndex.init();
+                
+                const nodesToEmbed = Array.from(this.graph.nodes.values()).filter(n => 
+                    n.kind === 'function' || n.kind === 'class' || n.kind === 'api_endpoint' || n.kind === 'file'
+                );
+                
+                if (nodesToEmbed.length > 0) {
+                    const chunks: CodeChunk[] = nodesToEmbed.map(n => ({
+                        id: n.id,
+                        filePath: n.filePath,
+                        content: `[${n.kind.toUpperCase()}] ${n.name}\n${n.signature || ''}\n${n.docComment || ''}\nPath: ${path.relative(this.rootDir, n.filePath)}`,
+                    }));
+                    
+                    const total = chunks.length;
+                    await embeddingIndex.embedAndStore(chunks, (count) => {
+                        spinner.text = `Generating context embeddings [${count}/${total}]...`;
+                    });
+                }
+            } catch (err) {
+                 logger.warn('Embedding generation failed or skipped', { error: String(err) });
+                 errors.push({ file: '(global)', error: `Embedding generation error: ${String(err)}` });
             }
         }
 

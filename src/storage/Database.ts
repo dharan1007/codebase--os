@@ -150,6 +150,16 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_session ON agent_checkpoints(session_id);
       CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_status ON agent_checkpoints(status);
     `);
+
+        // Migration: Add embedding column if it doesn't exist
+        try {
+            this.db.prepare('SELECT embedding FROM graph_nodes LIMIT 1').get();
+        } catch (err: any) {
+            if (err.message.includes('no such column')) {
+                logger.info(chalk.yellow('🌀 Database Migration: Adding "embedding" column to graph_nodes...'));
+                this.db.exec('ALTER TABLE graph_nodes ADD COLUMN embedding BLOB');
+            }
+        }
     }
 
     prepare(sql: string): any {

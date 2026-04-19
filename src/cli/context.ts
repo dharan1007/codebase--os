@@ -46,7 +46,7 @@ export async function loadContext(rootDir?: string): Promise<AppContext | null> 
 
     const db = new Database(cosDir);
     const configStore = new ConfigStore(db, cwd);
-    const config = configStore.loadFromFile() ?? configStore.load();
+    const config = configStore.load() ?? configStore.loadFromFile();
 
     if (!config) {
         console.log(chalk.red('\n✗ Could not load project configuration.'));

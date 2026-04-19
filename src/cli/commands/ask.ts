@@ -4,11 +4,12 @@ import inquirer from 'inquirer';
 import ora from 'ora';
 import path from 'path';
 import { loadContext } from '../context.js';
-import { ModelRouter } from '../../core/ai/ModelRouter.js';
+import { ModelRouter } from '../../core/orchestrator/ModelRouter.js';
 import { ConversationalPlanner } from '../../core/ai/ConversationalPlanner.js';
 import { SelfHealingExecutor } from '../../core/ai/SelfHealingExecutor.js';
 import { RichFormatter } from '../../core/output/RichFormatter.js';
 import { CheckpointManager } from '../../core/ai/CheckpointManager.js';
+import { ResourceMonitor } from '../../core/orchestrator/ResourceMonitor.js';
 
 export function askCommand(): Command {
     return new Command('ask')
@@ -35,8 +36,8 @@ export function askCommand(): Command {
             const ctx = await loadContext();
             if (!ctx) return;
             const { config, history, sessionId, graph, store, rootDir, db } = ctx;
-
-            const router = new ModelRouter(config);
+            const monitor = new ResourceMonitor(db);
+            const router = new ModelRouter(config, db, monitor);
 
             console.log(chalk.bold('\nCodebase OS — AI Assistant'));
             console.log(chalk.gray('─'.repeat(40)));
@@ -62,7 +63,7 @@ export function askCommand(): Command {
 
             // [STATELESS INQUIRY]: Direct response path
             if (plan.answer && (!plan.tasks || plan.tasks.length === 0)) {
-                console.log(chalk.bold('Assistant Engineering Analysis:'));
+                console.log(chalk.bold.blue('Sovereign Insights:'));
                 console.log(chalk.gray('─'.repeat(40)));
                 console.log(plan.answer);
                 console.log(chalk.gray('─'.repeat(40)));

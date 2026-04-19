@@ -183,13 +183,14 @@ export function gitCommand(): Command {
                 try {
                     const provider = AIProviderFactory.create(ctx.config);
                     const recentLog = manager.log(5).map(c => `- ${c.message}`).join('\n');
-                    const response = await provider.complete({
+                    const result = await provider.execute({
+                        taskType: 'simple',
+                        priority: 'low',
+                        context: `Generate a GitHub PR title and description for these recent commits:\n${recentLog}\n\nRespond with JSON: { "title": "...", "body": "..." }`,
                         systemPrompt: 'You are a helpful assistant who writes concise GitHub PR titles and descriptions.',
-                        userPrompt: `Generate a GitHub PR title and description for these recent commits:\n${recentLog}\n\nRespond with JSON: { "title": "...", "body": "..." }`,
-                        temperature: 0.3,
-                        responseFormat: 'json',
+                        maxTokens: 500,
                     });
-                    const parsed = JSON.parse(response.content) as { title: string; body: string };
+                    const parsed = JSON.parse(result.content) as { title: string; body: string };
                     prTitle = parsed.title ?? prTitle;
                     prBody = parsed.body ?? '';
                     console.log(chalk.gray(`AI generated title: "${prTitle}"`));
