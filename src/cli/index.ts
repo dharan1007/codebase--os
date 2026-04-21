@@ -26,6 +26,8 @@ import { agentCommand } from './commands/agent.js';
 import { infoCommand } from './commands/info.js';
 import { serveCommand } from './commands/serve.js';
 import { planCommand } from './commands/plan.js';
+import { chatCommand } from './commands/chat.js';
+import { propagateCommand } from './commands/propagate.js';
 
 dotenv.config({ path: path.join(process.cwd(), '.env') });
 
@@ -37,31 +39,27 @@ program
     .version('1.0.0', '-v, --version')
     .addHelpText('after', `
 ${chalk.bold('Core Commands:')}
-  ${chalk.cyan('cos init')}                          Initialize in current project
-  ${chalk.cyan('cos config')}                        Update AI model, key, or provider
-  ${chalk.cyan('cos agent "<task>"')}                Autonomous agent — plans, writes, verifies
-  ${chalk.cyan('cos ask "<request>"')}               AI: plan and apply changes in plain English
-  ${chalk.cyan('cos fix [file]')}                    AI: detect and fix errors automatically
-  ${chalk.cyan('cos continue')}                      Resume the last interrupted AI task
+  ${chalk.cyan('cos chat')}                          Interactive coding session (like Claude Code)
+  ${chalk.cyan('cos agent "<task>"')}                Autonomous one-shot agent
+  ${chalk.cyan('cos ask "<request>"')}               AI: plan and apply changes
+  ${chalk.cyan('cos fix [file]')}                    AI: detect and fix errors
+  ${chalk.cyan('cos continue')}                      Resume the last interrupted task
 
 ${chalk.bold('Graph Intelligence (unique to Codebase OS):')}
   ${chalk.cyan('cos scan')}                          Build/update the persistent relationship graph
-  ${chalk.cyan('cos plan "<task>"')}                 Compute blast radius + topological execution order
-  ${chalk.cyan('cos analyze <file>')}                Impact analysis of a specific file
+  ${chalk.cyan('cos plan "<task>"')}                 Blast radius + topological execution order
+  ${chalk.cyan('cos propagate')}                     Watch files — auto-propagate changes downstream
+  ${chalk.cyan('cos analyze <file>')}                Impact analysis for a specific file
   ${chalk.cyan('cos visualize')}                     Interactive HTML graph visualization
-  ${chalk.cyan('cos mind-map')}                      Project and plan visualization
 
 ${chalk.bold('Operations:')}
   ${chalk.cyan('cos sync')}                          Detect cross-layer sync issues
-  ${chalk.cyan('cos apply <file>')}                  Apply AI-suggested fixes to impacted files
   ${chalk.cyan('cos rollback <id>')}                 Revert an AI-applied change
-  ${chalk.cyan('cos history')}                       View history of AI changes across sessions
-  ${chalk.cyan('cos env check')}                     Check runtimes, ports, Docker
-  ${chalk.cyan('cos serve')}                         Start the live dashboard (http://localhost:3000)
-  ${chalk.cyan('cos info')}                          Show project guide and credits
+  ${chalk.cyan('cos history')}                       View changes across all sessions
+  ${chalk.cyan('cos serve')}                         Start the live dashboard
+  ${chalk.cyan('cos init')}                          Initialize in current project
 
 `);
-
 
 program.addCommand(initCommand());
 program.addCommand(configCommand());
@@ -85,6 +83,8 @@ program.addCommand(continueCommand());
 program.addCommand(infoCommand());
 program.addCommand(serveCommand());
 program.addCommand(planCommand());
+program.addCommand(chatCommand());
+program.addCommand(propagateCommand());
 
 // Handle Ctrl+C gracefully
 process.on('SIGINT', () => {
