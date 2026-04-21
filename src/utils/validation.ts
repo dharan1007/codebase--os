@@ -1,6 +1,7 @@
 import { Project, SourceFile, Diagnostic, DiagnosticCategory } from 'ts-morph';
 import path from 'path';
 import fs from 'fs';
+import { z } from 'zod';
 import { logger } from './logger.js';
 
 export interface ValidationResult {
@@ -158,4 +159,76 @@ export function extractJSONFromAIOutput(raw: string): any {
     }
 
     throw new Error('No valid JSON structure found in AI response after deep extraction.');
+}
+
+// ─── Agent Action Schema ──────────────────────────────────────────────────────
+
+const AgentToolEnum = z.enum([
+    'read_file',
+    'write_file',
+    'patch_file',
+    'delete_file',
+    'move_file',
+    'list_files',
+    'run_shell',
+    'search_code',
+    'find_references',
+    'pause_and_ask',
+    'spawn_sub_agent',
+    'finish',
+]);
+
+export const AgentActionSchema = z.object({
+    tool: AgentToolEnum,
+    args: z.record(z.string()).default({}),
+    reasoning: z.string().min(1, 'Reasoning must not be empty'),
+    tasklist: z.array(z.string()).optional(),
+});
+
+export type AgentActionValidated = z.infer<typeof AgentActionSchema>;
+
+/**
+ * Validates a raw parsed agent action against the schema and enforces path safety.
+ * Throws with a clear repair message on failure so the agent can self-correct.
+ */
+export function validateAgentAction(raw: unknown, rootDir: string): AgentActionValidated {
+    const result = AgentActionSchema.safeParse(raw);
+    if (!result.success) {
+        const issues = result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ');
+        throw new Error(`[SCHEMA VIOLATION]: Invalid action structure — ${issues}. Fix the JSON and retry.`);
+    }
+
+    const action = result.data;
+
+    // Path sandbox: reject absolute paths or paths escaping rootDir
+    const pathArg = action.args['path'] || action.args['oldPath'] || action.args['newPath'];
+    if (pathArg) {
+        if (path.isAbsolute(pathArg)) {
+            throw new Error(
+                `[PATH SANDBOX VIOLATION]: "${pathArg}" is an absolute path. ` +
+                `You MUST use paths relative to the project root. Correct the path and retry.`
+            );
+        }
+        const resolved = path.resolve(rootDir, pathArg);
+        const rootResolved = path.resolve(rootDir);
+        if (!resolved.startsWith(rootResolved + path.sep) && resolved !== rootResolved) {
+            throw new Error(
+                `[PATH SANDBOX VIOLATION]: "${pathArg}" escapes the project root. ` +
+                `All file paths must be relative and within the project. Correct the path and retry.`
+            );
+        }
+    }
+
+    // Content presence: write_file and patch_file must have non-empty content/diff
+    if (action.tool === 'write_file' && (!action.args['content'] || action.args['content'].trim().length === 0)) {
+        throw new Error('[CONTENT VIOLATION]: write_file requires a non-empty "content" argument. Provide the full file content.');
+    }
+    if (action.tool === 'patch_file' && (!action.args['diff'] || action.args['diff'].trim().length === 0)) {
+        throw new Error('[CONTENT VIOLATION]: patch_file requires a non-empty "diff" argument in unified diff format.');
+    }
+    if (action.tool === 'finish' && (!action.args['summary'] || action.args['summary'].trim().length === 0)) {
+        throw new Error('[CONTENT VIOLATION]: finish requires a non-empty "summary" argument describing what was accomplished.');
+    }
+
+    return action;
 }

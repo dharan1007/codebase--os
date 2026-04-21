@@ -3,375 +3,883 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Codebase OS — Sovereign AI Console</title>
+    <title>Codebase OS — Live Console</title>
+    <meta name="description" content="Codebase OS real-time autonomous agent dashboard. Monitor every step, diff, and decision live.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@600;700;800;900&family=Fira+Code&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
-            --color-primary: #8b5cf6;
-            --color-secondary: #ec4899;
-            --color-accent: #06b6d4;
-            --color-bg: #020617;
-            --color-surface: rgba(15, 23, 42, 0.6);
-            --color-text: #f8fafc;
-            --color-text-muted: #94a3b8;
-            --color-error: #f43f5e;
-            --color-success: #10b981;
-            --radius-soft: 20px;
-            --shadow-glow: 0 0 50px rgba(139, 92, 246, 0.2);
-            --shadow-inner: inset 0 2px 10px rgba(0, 0, 0, 0.3);
-            --font-display: 'Outfit', sans-serif;
-            --font-body: 'Inter', sans-serif;
-            --font-mono: 'Fira Code', monospace;
+            --bg-root:    #080d1a;
+            --bg-panel:   #0d1526;
+            --bg-card:    #0f1b30;
+            --bg-input:   #111e35;
+            --border:     rgba(0, 212, 255, 0.10);
+            --border-dim: rgba(255, 255, 255, 0.05);
+
+            --cyan:       #00d4ff;
+            --cyan-dim:   rgba(0, 212, 255, 0.12);
+            --cyan-glow:  0 0 30px rgba(0, 212, 255, 0.18);
+
+            --amber:      #f59e0b;
+            --amber-dim:  rgba(245, 158, 11, 0.12);
+
+            --green:      #10b981;
+            --green-dim:  rgba(16, 185, 129, 0.12);
+
+            --red:        #ef4444;
+            --red-dim:    rgba(239, 68, 68, 0.12);
+
+            --text:       #e2e8f0;
+            --text-muted: #64748b;
+            --text-dim:   #334155;
+
+            --font-ui:    'Inter', sans-serif;
+            --font-head:  'Outfit', sans-serif;
+            --font-mono:  'JetBrains Mono', monospace;
+
+            --radius:     14px;
+            --radius-sm:  8px;
         }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-        body {
-            background-color: var(--color-bg);
-            color: var(--color-text);
-            font-family: var(--font-body);
+        html, body {
+            height: 100%;
+            background: var(--bg-root);
+            color: var(--text);
+            font-family: var(--font-ui);
+            font-size: 14px;
             overflow: hidden;
-            height: 100vh;
-            background: 
-                radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
-                radial-gradient(circle at 100% 100%, rgba(6, 182, 212, 0.1) 0%, transparent 50%);
         }
 
-        #app-root {
+        #app {
             display: grid;
-            grid-template-columns: 320px 1fr;
+            grid-template-columns: 280px 1fr 300px;
+            grid-template-rows: 56px 1fr;
             height: 100vh;
+            gap: 0;
         }
 
-        /* Sovereign Sidebar */
-        aside {
-            background: rgba(2, 6, 23, 0.9);
-            border-right: 1px solid rgba(255, 255, 255, 0.05);
-            padding: 3rem 2rem;
+        /* ─── Header Bar ─────────────────────────────────────────────── */
+        header {
+            grid-column: 1 / -1;
             display: flex;
-            flex-direction: column;
-            gap: 3rem;
-            backdrop-filter: blur(40px);
-        }
-
-        .logo-container {
-            position: relative;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border-dim);
+            z-index: 10;
         }
 
         .logo {
-            font-family: var(--font-display);
-            font-size: 2rem;
+            font-family: var(--font-head);
+            font-size: 1.1rem;
             font-weight: 900;
-            letter-spacing: -0.05em;
-            background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.03em;
+            color: var(--cyan);
+        }
+
+        .logo span {
+            color: var(--text-muted);
+            font-weight: 400;
+            font-size: 0.75rem;
+            margin-left: 8px;
+            letter-spacing: 0.1em;
             text-transform: uppercase;
         }
 
-        .logo-sub {
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.3em;
-            color: var(--color-text-muted);
-            margin-top: -5px;
+        .header-stats {
+            display: flex;
+            align-items: center;
+            gap: 24px;
         }
 
-        /* Main Viewport */
-        main {
-            padding: 4rem;
+        .header-stat {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.78rem;
+        }
+
+        .header-stat .label {
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-size: 0.68rem;
+        }
+
+        .header-stat .value {
+            font-family: var(--font-mono);
+            font-weight: 500;
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 8px var(--green);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50%       { opacity: 0.4; }
+        }
+
+        .model-badge {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            padding: 3px 10px;
+            background: var(--cyan-dim);
+            border: 1px solid var(--border);
+            border-radius: 100px;
+            color: var(--cyan);
+        }
+
+        /* ─── Left Sidebar — Agent Steps ────────────────────────────── */
+        aside.steps-panel {
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border-dim);
             display: flex;
             flex-direction: column;
-            gap: 2.5rem;
-            overflow-y: auto;
-            position: relative;
-        }
-
-        .hero-section {
-            animation: fadeIn 1s ease-out;
-        }
-
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-        h1 {
-            font-family: var(--font-display);
-            font-size: 4.5rem;
-            font-weight: 900;
-            line-height: 0.9;
-            letter-spacing: -0.04em;
-            margin-bottom: 1rem;
-        }
-
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 0.6rem 1.2rem;
-            background: rgba(16, 185, 129, 0.1);
-            color: var(--color-success);
-            border-radius: 100px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            letter-spacing: 0.05em;
-            border: 1px solid rgba(16, 185, 129, 0.2);
-            text-transform: uppercase;
-            margin-bottom: 1.5rem;
-        }
-
-        /* High-Fidelity Dashboard Cards */
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 2rem;
-        }
-
-        .card {
-            background: var(--color-surface);
-            backdrop-filter: blur(30px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: var(--radius-soft);
-            padding: 2.5rem;
-            transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
-            position: relative;
             overflow: hidden;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
         }
 
-        .card::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0; height: 1px;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+        .panel-header {
+            padding: 16px 18px 12px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border-dim);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
 
-        .card:hover {
-            transform: scale(1.02) translateY(-5px);
-            border-color: var(--color-primary);
-            box-shadow: var(--shadow-glow);
-            background: rgba(30, 41, 59, 0.8);
+        .step-count-badge {
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            color: var(--cyan);
         }
 
-        .card-title {
-            font-family: var(--font-display);
-            font-size: 1rem;
-            font-weight: 700;
-            color: var(--color-text-muted);
+        #step-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 0;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-dim) transparent;
+        }
+
+        .step-item {
+            padding: 10px 18px;
+            border-left: 2px solid transparent;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(-12px); }
+            to   { opacity: 1; transform: translateX(0); }
+        }
+
+        .step-item:hover {
+            background: var(--bg-card);
+        }
+
+        .step-item.selected {
+            background: var(--cyan-dim);
+            border-left-color: var(--cyan);
+        }
+
+        .step-item.success { border-left-color: var(--green); }
+        .step-item.failed  { border-left-color: var(--red); }
+
+        .step-tool {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 500;
+            margin-bottom: 3px;
+        }
+
+        .step-tool.write  { color: var(--green); }
+        .step-tool.patch  { color: var(--cyan); }
+        .step-tool.read   { color: var(--text-muted); }
+        .step-tool.shell  { color: var(--amber); }
+        .step-tool.delete { color: var(--red); }
+        .step-tool.other  { color: var(--text-dim); }
+
+        .step-path {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .step-num {
+            font-family: var(--font-mono);
+            font-size: 0.62rem;
+            color: var(--text-dim);
+        }
+
+        /* ─── Center Panel — Diff Viewer ────────────────────────────── */
+        main.diff-panel {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border-right: 1px solid var(--border-dim);
+        }
+
+        .diff-viewer {
+            flex: 1;
+            overflow-y: auto;
+            background: #060b16;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            line-height: 1.6;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-dim) transparent;
+        }
+
+        .diff-file-header {
+            padding: 10px 20px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border-dim);
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .diff-file-name {
+            color: var(--cyan);
+            font-weight: 500;
+        }
+
+        .diff-stat-add { color: var(--green); }
+        .diff-stat-rem { color: var(--red); }
+
+        .diff-hunk-header {
+            padding: 4px 20px;
+            background: rgba(0, 212, 255, 0.04);
+            border-top: 1px solid var(--border-dim);
+            border-bottom: 1px solid var(--border-dim);
+            color: var(--cyan);
+            font-size: 0.72rem;
+        }
+
+        .diff-line {
+            display: flex;
+            padding: 0 20px;
+            white-space: pre;
+        }
+
+        .diff-line.add {
+            background: rgba(16, 185, 129, 0.08);
+            color: var(--green);
+        }
+
+        .diff-line.remove {
+            background: rgba(239, 68, 68, 0.08);
+            color: var(--red);
+            text-decoration-color: var(--red);
+        }
+
+        .diff-line.context {
+            color: var(--text-dim);
+        }
+
+        .diff-line-num {
+            width: 40px;
+            min-width: 40px;
+            color: var(--text-dim);
+            font-size: 0.68rem;
+            padding-right: 12px;
+            user-select: none;
+            text-align: right;
+        }
+
+        .diff-line-prefix {
+            width: 16px;
+            min-width: 16px;
+            text-align: center;
+        }
+
+        .no-diff {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            gap: 12px;
+            color: var(--text-dim);
+        }
+
+        .no-diff-icon {
+            font-size: 2rem;
+            opacity: 0.3;
+        }
+
+        .reasoning-box {
+            padding: 14px 20px;
+            background: var(--bg-panel);
+            border-top: 1px solid var(--border-dim);
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+            max-height: 90px;
+            overflow-y: auto;
+        }
+
+        .reasoning-label {
+            font-size: 0.65rem;
+            font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.1em;
-            margin-bottom: 1rem;
+            color: var(--text-dim);
+            margin-bottom: 4px;
         }
 
-        .stat-value {
-            font-family: var(--font-display);
-            font-size: 3.5rem;
-            font-weight: 800;
-            line-height: 1;
-            margin-bottom: 0.5rem;
+        /* ─── Right Sidebar — Tasklist + Stats ──────────────────────── */
+        aside.info-panel {
+            background: var(--bg-panel);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
 
-        .stat-label {
-            font-size: 0.9rem;
-            color: var(--color-text-muted);
-        }
-
-        /* Visual Reasoning System */
-        .reasoning-grid {
+        .stats-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 2rem;
+            gap: 1px;
+            background: var(--border-dim);
+            border-bottom: 1px solid var(--border-dim);
         }
 
-        .terminal-container {
-            background: #000;
-            border-radius: var(--radius-soft);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            padding: 2rem;
-            font-family: var(--font-mono);
-            font-size: 0.85rem;
-            line-height: 1.6;
-            height: 350px;
+        .stat-cell {
+            background: var(--bg-panel);
+            padding: 14px 16px;
+        }
+
+        .stat-cell .s-label {
+            font-size: 0.62rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .stat-cell .s-value {
+            font-family: var(--font-head);
+            font-size: 1.6rem;
+            font-weight: 800;
+            line-height: 1;
+        }
+
+        .s-value.cyan  { color: var(--cyan); }
+        .s-value.amber { color: var(--amber); }
+        .s-value.green { color: var(--green); }
+        .s-value.red   { color: var(--red); }
+
+        #task-list {
+            flex: 1;
             overflow-y: auto;
-            box-shadow: var(--shadow-inner);
+            padding: 8px 0;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-dim) transparent;
         }
 
-        .terminal-header {
+        .task-item {
+            padding: 9px 18px;
             display: flex;
-            gap: 0.5rem;
-            margin-bottom: 1rem;
-            opacity: 0.5;
+            align-items: flex-start;
+            gap: 10px;
+            font-size: 0.78rem;
+            animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            line-height: 1.4;
         }
 
-        .dot { width: 8px; height: 8px; border-radius: 50%; }
-        .red { background: #ff5f56; }
-        .yellow { background: #ffbd2e; }
-        .green { background: #27c93f; }
+        .task-icon {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            margin-top: 1px;
+            flex-shrink: 0;
+        }
 
-        .line-add { color: var(--color-success); }
-        .line-system { color: var(--color-primary); opacity: 0.8; }
-        .line-meta { color: var(--color-text-muted); }
+        .task-icon.done     { color: var(--green); }
+        .task-icon.active   { color: var(--amber); }
+        .task-icon.pending  { color: var(--text-dim); }
 
-        /* Dynamic Glow Blobs */
-        .glow-blob {
-            position: absolute;
-            width: 800px;
-            height: 800px;
-            background: radial-gradient(circle, var(--color-primary), transparent 70%);
-            filter: blur(120px);
-            opacity: 0.05;
+        .task-text.done    { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--text-dim); }
+        .task-text.active  { color: var(--text); font-weight: 500; }
+        .task-text.pending { color: var(--text-dim); }
+
+        .approval-card {
+            margin: 12px;
+            background: var(--red-dim);
+            border: 1px solid var(--red);
+            border-radius: var(--radius-sm);
+            padding: 14px 16px;
+        }
+
+        .approval-title {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--red);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 8px;
+        }
+
+        .approval-text {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            line-height: 1.4;
+        }
+
+        .approval-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 7px 12px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-family: var(--font-ui);
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .btn.approve {
+            background: var(--green-dim);
+            color: var(--green);
+            border: 1px solid var(--green);
+        }
+
+        .btn.approve:hover { background: var(--green); color: #000; }
+
+        .btn.reject {
+            background: var(--red-dim);
+            color: var(--red);
+            border: 1px solid var(--red);
+        }
+
+        .btn.reject:hover { background: var(--red); color: #fff; }
+
+        #pending-action-card { display: none; }
+        #pending-action-card.visible { display: block; }
+
+        /* Scan lines overlay (futuristic effect) */
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.04) 2px,
+                rgba(0, 0, 0, 0.04) 4px
+            );
             pointer-events: none;
-            z-index: -1;
+            z-index: 999;
         }
 
-        #blob-1 { top: -200px; right: -200px; }
-        #blob-2 { bottom: -200px; left: -200px; }
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-dim); border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
-        .cursor {
-            display: inline-block;
-            width: 8px;
-            height: 1em;
-            background: var(--color-primary);
-            animation: blink 1s infinite steps(2);
-            margin-left: 5px;
+        /* Empty states */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            gap: 8px;
+            color: var(--text-dim);
+            font-size: 0.78rem;
+            text-align: center;
+            padding: 24px;
         }
-
-        @keyframes blink { 0% { opacity: 0; } 100% { opacity: 1; } }
     </style>
 </head>
 <body>
-    <div id="app-root">
-        <!-- Floating Glow -->
-        <div id="blob-1" class="glow-blob"></div>
-        <div id="blob-2" class="glow-blob"></div>
+<div id="app">
 
-        <aside>
-            <div class="logo-container">
-                <div class="logo">Codebase OS</div>
-                <div class="logo-sub">Sovereign Edition v1.2</div>
+    <!-- ─── Header ─────────────────────────────────────────────── -->
+    <header>
+        <div style="display:flex;align-items:center;gap:12px;">
+            <div class="logo">COS<span>Live Console</span></div>
+            <div class="status-dot" id="conn-dot" title="Disconnected" style="background:var(--text-dim);box-shadow:none;"></div>
+        </div>
+        <div class="header-stats">
+            <div class="header-stat">
+                <span class="label">Steps</span>
+                <span class="value" id="h-steps" style="color:var(--cyan);">0</span>
             </div>
-            
-            <div style="margin-top: auto;">
-                <div style="font-size: 0.65rem; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.2em; margin-bottom: 1rem;">ACTIVE INSTANCE</div>
-                <div style="display: flex; align-items: center; gap: 0.75rem;">
-                    <div style="width: 40px; height: 40px; background: linear-gradient(135deg, #1e293b, #0f172a); border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);"></div>
-                    <div>
-                        <div style="font-weight: 600; font-size: 0.9rem;">Dharan AI</div>
-                        <div style="font-size: 0.75rem; color: var(--color-success);">Principal Connected</div>
-                    </div>
-                </div>
+            <div class="header-stat">
+                <span class="label">Failures</span>
+                <span class="value" id="h-failures" style="color:var(--red);">0</span>
             </div>
-        </aside>
-
-        <main>
-            <div class="hero-section">
-                <div class="status-badge" id="monitor-badge">● INFRASTRUCTURE NOMINAL</div>
-                <h1>Intelligence<br>Redefined</h1>
+            <div class="header-stat">
+                <span class="label">Modified</span>
+                <span class="value" id="h-modified" style="color:var(--green);">0</span>
             </div>
+            <div class="model-badge" id="h-model">connecting...</div>
+        </div>
+    </header>
 
-            <div class="dashboard-grid">
-                <div class="card stagger-item">
-                    <div class="card-title">Failure Store</div>
-                    <div class="stat-value" style="color: var(--color-error)">14</div>
-                    <div class="stat-label">Recurring anomalies detected and prioritized.</div>
-                </div>
-                <div class="card stagger-item">
-                    <div class="card-title">Compute Budget</div>
-                    <div class="stat-value" style="color: var(--color-accent)">$0.85</div>
-                    <div class="stat-label">Projected monthly optimization: 64%.</div>
-                </div>
-                <div class="card stagger-item">
-                    <div class="card-title">Code Health</div>
-                    <div class="stat-value" style="color: var(--color-success)">98%</div>
-                    <div class="stat-label">Sovereign Graph reflects 0 critical debt nodes.</div>
-                </div>
+    <!-- ─── Steps Sidebar ─────────────────────────────────────── -->
+    <aside class="steps-panel">
+        <div class="panel-header">
+            Agent Steps
+            <span class="step-count-badge" id="step-counter">0</span>
+        </div>
+        <div id="step-list">
+            <div class="empty-state">
+                Run <code style="color:var(--cyan);font-family:var(--font-mono);">cos agent</code><br>to see live steps here.
             </div>
+        </div>
+    </aside>
 
-            <div class="reasoning-grid">
-                <div class="card stagger-item" style="padding: 0; display: flex; flex-direction: column;">
-                    <div style="padding: 2.5rem 2.5rem 1rem 2.5rem;">
-                        <div class="card-title">Active Reasoning</div>
-                        <p style="font-size: 0.95rem; color: var(--color-text-muted); line-height: 1.6;">
-                            The Principal Assistant is currently neutralizing structural inconsistencies in the AI Orchestration layer.
-                        </p>
-                    </div>
-                    <div class="terminal-container" style="background: transparent; border-top: 1px solid rgba(255,255,255,0.05); height: 100%; box-shadow: none;">
-                        <div class="line-system">[PLANNER] Constructing impact-aware graph...</div>
-                        <div class="line-system">[ROUTER] Selecting LLM: Claude 3.5 Sonnet...</div>
-                        <div class="line-meta">[GRAPH] Analyzing imports in src/core/ai...</div>
-                        <div class="line-meta">[GRAPH] Detected 14 candidate nodes for refactoring.</div>
-                        <div class="line-add">[RESOLVE] Applied Sovereign logic to ModelRouter.ts</div>
-                        <div class="line-system">[STATUS] Optimization cycle complete. <span class="cursor"></span></div>
-                    </div>
-                </div>
-
-                <div class="card stagger-item" style="padding: 0;">
-                    <div style="padding: 2.5rem 2.5rem 1rem 2.5rem;">
-                        <div class="card-title">Impact Visualization</div>
-                    </div>
-                    <div class="terminal-container" style="background: #000; border-radius: 0 0 20px 20px; border: none;">
-                        <div class="terminal-header">
-                            <div class="dot red"></div>
-                            <div class="dot yellow"></div>
-                            <div class="dot green"></div>
-                        </div>
-                        <div class="line-meta">// diff src/core/ai/ModelRouter.ts</div>
-                        <div>- private defaultChain: string[]</div>
-                        <div class="line-add">+ private userPreferredChain: ProviderSelection[]</div>
-                        <div>  </div>
-                        <div class="line-meta">// diff src/ui/index.html</div>
-                        <div class="line-add">+ background: var(--color-bg);</div>
-                        <div class="line-add">+ backdrop-filter: blur(40px);</div>
-                    </div>
-                </div>
+    <!-- ─── Diff Viewer ───────────────────────────────────────── -->
+    <main class="diff-panel">
+        <div class="panel-header" id="diff-header">
+            Diff Viewer
+            <span style="font-family:var(--font-mono);font-size:0.68rem;color:var(--text-dim);">Select a step</span>
+        </div>
+        <div class="diff-viewer" id="diff-viewer">
+            <div class="no-diff">
+                <div class="no-diff-icon">&#11835;</div>
+                <div>No diff to display.</div>
+                <div style="font-size:0.7rem;color:var(--text-dim);">Select a write or patch step from the sidebar.</div>
             </div>
-        </main>
-    </div>
+        </div>
+        <div class="reasoning-box" id="reasoning-box" style="display:none;">
+            <div class="reasoning-label">Reasoning</div>
+            <div id="reasoning-text"></div>
+        </div>
+    </main>
 
-    <!-- Animation & Interactions -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
-    <script>
-        // High-end stagger entrance
-        gsap.from('.stagger-item', {
-            duration: 1.2,
-            opacity: 0,
-            y: 40,
-            stagger: 0.15,
-            ease: 'expo.out',
-            delay: 0.3
+    <!-- ─── Info Panel (Tasklist + Stats) ────────────────────── -->
+    <aside class="info-panel">
+        <div class="stats-grid">
+            <div class="stat-cell">
+                <div class="s-label">Agent Steps</div>
+                <div class="s-value cyan" id="s-steps">0</div>
+            </div>
+            <div class="stat-cell">
+                <div class="s-label">Failures</div>
+                <div class="s-value red" id="s-failures">0</div>
+            </div>
+            <div class="stat-cell">
+                <div class="s-label">Files Written</div>
+                <div class="s-value green" id="s-written">0</div>
+            </div>
+            <div class="stat-cell">
+                <div class="s-label">Recurring</div>
+                <div class="s-value amber" id="s-recurring">0</div>
+            </div>
+        </div>
+
+        <div class="panel-header" style="border-top:1px solid var(--border-dim);">
+            Task Plan
+        </div>
+
+        <!-- High-risk action approval card -->
+        <div id="pending-action-card" class="approval-card">
+            <div class="approval-title">High-Risk Action — Approval Required</div>
+            <div class="approval-text" id="approval-text">Awaiting details...</div>
+            <div class="approval-buttons">
+                <button class="btn approve" onclick="approveAction()">Approve</button>
+                <button class="btn reject" onclick="rejectAction()">Deny</button>
+            </div>
+        </div>
+
+        <div id="task-list">
+            <div class="empty-state">
+                Task plan will appear here as the agent runs.
+            </div>
+        </div>
+    </aside>
+
+</div>
+
+<script>
+    const API = 'http://localhost:3000';
+    let steps = [];
+    let tasklist = [];
+    let filesWritten = new Set();
+    let selectedStep = null;
+
+    // ─── SSE Connection ──────────────────────────────────────────────
+    function connectSSE() {
+        const es = new EventSource(`${API}/events`);
+
+        es.addEventListener('open', () => {
+            document.getElementById('conn-dot').style.background = 'var(--green)';
+            document.getElementById('conn-dot').style.boxShadow = '0 0 8px var(--green)';
+            document.getElementById('conn-dot').title = 'Connected';
+            document.getElementById('h-model').textContent = 'connected';
         });
 
-        gsap.from('h1', {
-            duration: 1.8,
-            opacity: 0,
-            x: -40,
-            ease: 'power4.out'
+        es.addEventListener('step', (e) => {
+            const data = JSON.parse(e.data);
+            steps.push(data);
+            renderStep(data);
+            updateCounters();
+
+            if (data.action.tool === 'write_file' || data.action.tool === 'patch_file') {
+                filesWritten.add(data.action.args.path || '');
+                document.getElementById('s-written').textContent = filesWritten.size;
+                document.getElementById('h-modified').textContent = filesWritten.size;
+                // Auto-select new write/patch steps for the diff viewer
+                selectStep(steps.length - 1);
+            }
         });
 
-        // Sophisticated mouse interaction
-        document.addEventListener('mousemove', (e) => {
-            const centerX = window.innerWidth / 2;
-            const centerY = window.innerHeight / 2;
-            const moveX = (e.clientX - centerX) / 40;
-            const moveY = (e.clientY - centerY) / 40;
-
-            gsap.to('.glow-blob', {
-                duration: 2,
-                x: moveX * 2,
-                y: moveY * 2,
-                ease: 'power2.out'
-            });
-
-            gsap.to('main', {
-                duration: 2.5,
-                backgroundPosition: `${50 + (e.clientX / 100)}% ${50 + (e.clientY / 100)}%`,
-                ease: 'power1.out'
-            });
+        es.addEventListener('model', (e) => {
+            const data = JSON.parse(e.data);
+            document.getElementById('h-model').textContent = `${data.provider}/${data.model}`;
         });
-    </script>
+
+        es.addEventListener('pending_action', (e) => {
+            const data = JSON.parse(e.data);
+            showApprovalCard(data);
+        });
+
+        es.onerror = () => {
+            document.getElementById('conn-dot').style.background = 'var(--amber)';
+            document.getElementById('conn-dot').style.boxShadow = '0 0 8px var(--amber)';
+            document.getElementById('conn-dot').title = 'Reconnecting...';
+            document.getElementById('h-model').textContent = 'reconnecting...';
+            setTimeout(connectSSE, 3000);
+            es.close();
+        };
+    }
+
+    // ─── Stats Polling ───────────────────────────────────────────────
+    async function fetchStats() {
+        try {
+            const r = await fetch(`${API}/api/stats`);
+            const data = await r.json();
+            document.getElementById('s-failures').textContent = data.failureCount ?? 0;
+            document.getElementById('h-failures').textContent = data.failureCount ?? 0;
+            document.getElementById('s-recurring').textContent = data.recurringCount ?? 0;
+            if (data.activeProvider && data.activeProvider !== 'unknown') {
+                document.getElementById('h-model').textContent = `${data.activeProvider}/${data.activeModel}`;
+            }
+        } catch { /* server might not be up yet */ }
+    }
+
+    // ─── Render a Step Entry ─────────────────────────────────────────
+    function renderStep(stepData) {
+        const list = document.getElementById('step-list');
+        if (list.querySelector('.empty-state')) list.innerHTML = '';
+
+        const idx = steps.length - 1;
+        const tool = stepData.action.tool;
+        const targetPath = stepData.action.args.path || stepData.action.args.command || stepData.action.args.dir || '';
+        const isSuccess = stepData.result.success;
+
+        const toolClass = {
+            write_file: 'write', patch_file: 'patch', read_file: 'read',
+            run_shell: 'shell', delete_file: 'delete',
+        }[tool] || 'other';
+
+        const item = document.createElement('div');
+        item.className = `step-item ${isSuccess ? 'success' : 'failed'}`;
+        item.dataset.idx = idx;
+        item.onclick = () => selectStep(idx);
+        item.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
+                <div class="step-tool ${toolClass}">${tool.replace(/_/g, '_')}</div>
+                <div class="step-num">#${stepData.step}</div>
+            </div>
+            <div class="step-path" title="${targetPath}">${targetPath || '(no path)'}</div>
+        `;
+        list.appendChild(item);
+        list.scrollTop = list.scrollHeight;
+    }
+
+    // ─── Select step + show diff ─────────────────────────────────────
+    function selectStep(idx) {
+        selectedStep = idx;
+        document.querySelectorAll('.step-item').forEach((el, i) => {
+            el.classList.toggle('selected', i === idx);
+        });
+
+        const stepData = steps[idx];
+        if (!stepData) return;
+
+        const action = stepData.action;
+        const result = stepData.result;
+
+        // Show reasoning
+        const rBox = document.getElementById('reasoning-box');
+        const rText = document.getElementById('reasoning-text');
+        if (action.reasoning) {
+            rText.textContent = action.reasoning;
+            rBox.style.display = 'block';
+        } else {
+            rBox.style.display = 'none';
+        }
+
+        const viewer = document.getElementById('diff-viewer');
+        const header = document.getElementById('diff-header');
+
+        if (action.tool === 'patch_file' && action.args.diff) {
+            renderDiff(action.args.path, action.args.diff);
+        } else if (action.tool === 'write_file') {
+            const content = action.args.content || '';
+            // Show full file as all-additions diff
+            const fakeDiff = content.split('\n').map(l => `+${l}`).join('\n');
+            renderDiff(action.args.path, `@@ -0,0 +1,${content.split('\n').length} @@\n` + fakeDiff, true);
+        } else if (action.tool === 'run_shell') {
+            viewer.innerHTML = `
+                <div class="diff-hunk-header">$ ${action.args.command || ''}</div>
+                <pre style="padding:16px 20px;color:var(--text-muted);white-space:pre-wrap;font-size:0.78rem;">${escHtml(result.output || result.error || '(no output)')}</pre>
+            `;
+            header.querySelector('span').textContent = 'Shell output';
+        } else {
+            viewer.innerHTML = `<pre style="padding:16px 20px;color:var(--text-muted);white-space:pre-wrap;font-size:0.78rem;">${escHtml(result.output || result.error || '(no content)')}</pre>`;
+            header.querySelector('span').textContent = action.args.path || action.args.dir || '';
+        }
+    }
+
+    function renderDiff(filePath, diffText, isNew = false) {
+        const viewer = document.getElementById('diff-viewer');
+        const header = document.getElementById('diff-header');
+
+        const lines = diffText.split('\n');
+        let addCount = 0, remCount = 0;
+        for (const l of lines) {
+            if (l.startsWith('+') && !l.startsWith('+++')) addCount++;
+            if (l.startsWith('-') && !l.startsWith('---')) remCount++;
+        }
+
+        header.querySelector('span').innerHTML =
+            `<span class="diff-file-name">${escHtml(filePath || '')}</span>` +
+            `&nbsp;&nbsp;<span class="diff-stat-add">+${addCount}</span>` +
+            `&nbsp;<span class="diff-stat-rem">-${remCount}</span>`;
+
+        let html = '';
+        let oldLine = 1, newLine = 1;
+        const hunkRegex = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+        for (const rawLine of lines) {
+            if (rawLine.startsWith('---') || rawLine.startsWith('+++')) continue;
+
+            const hunkMatch = rawLine.match(hunkRegex);
+            if (hunkMatch) {
+                oldLine = parseInt(hunkMatch[1], 10);
+                newLine = parseInt(hunkMatch[2], 10);
+                html += `<div class="diff-hunk-header">${escHtml(rawLine)}</div>`;
+                continue;
+            }
+
+            if (rawLine.startsWith('+')) {
+                html += `<div class="diff-line add"><span class="diff-line-num">${newLine++}</span><span class="diff-line-prefix">+</span><span>${escHtml(rawLine.slice(1))}</span></div>`;
+            } else if (rawLine.startsWith('-')) {
+                html += `<div class="diff-line remove"><span class="diff-line-num">${oldLine++}</span><span class="diff-line-prefix">-</span><span>${escHtml(rawLine.slice(1))}</span></div>`;
+            } else if (rawLine.startsWith(' ')) {
+                html += `<div class="diff-line context"><span class="diff-line-num">${newLine++}</span><span class="diff-line-prefix"> </span><span>${escHtml(rawLine.slice(1))}</span></div>`;
+                oldLine++;
+            }
+        }
+
+        viewer.innerHTML = html || '<div class="no-diff">Empty diff.</div>';
+        viewer.scrollTop = 0;
+    }
+
+    function escHtml(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // ─── Tasklist ─────────────────────────────────────────────────────
+    function updateTasklist(tasks) {
+        if (!tasks || tasks.length === 0) return;
+        tasklist = tasks;
+        const list = document.getElementById('task-list');
+        list.innerHTML = '';
+
+        for (const task of tasks) {
+            const isDone = task.includes('(done)') || task.includes('[done]');
+            const isActive = task.includes('(in progress)') || task.includes('[in progress]');
+            const state = isDone ? 'done' : isActive ? 'active' : 'pending';
+            const icon = isDone ? '[x]' : isActive ? '[>]' : '[ ]';
+
+            const item = document.createElement('div');
+            item.className = 'task-item';
+            item.innerHTML = `
+                <span class="task-icon ${state}">${icon}</span>
+                <span class="task-text ${state}">${escHtml(task)}</span>
+            `;
+            list.appendChild(item);
+        }
+    }
+
+    // ─── Counters ─────────────────────────────────────────────────────
+    function updateCounters() {
+        const count = steps.length;
+        document.getElementById('step-counter').textContent = count;
+        document.getElementById('s-steps').textContent = count;
+        document.getElementById('h-steps').textContent = count;
+    }
+
+    // ─── Approval card ────────────────────────────────────────────────
+    function showApprovalCard(data) {
+        const card = document.getElementById('pending-action-card');
+        document.getElementById('approval-text').textContent =
+            `Action: ${data.action || data.tool}\nTarget: ${data.target || 'unknown'}\n${data.evaluation?.reasoning || ''}`;
+        card.classList.add('visible');
+    }
+
+    function approveAction() {
+        fetch(`${API}/api/approve`, { method: 'POST' });
+        document.getElementById('pending-action-card').classList.remove('visible');
+    }
+
+    function rejectAction() {
+        fetch(`${API}/api/reject`, { method: 'POST' });
+        document.getElementById('pending-action-card').classList.remove('visible');
+    }
+
+    // ─── Load existing steps (on page refresh) ────────────────────────
+    async function loadExistingSteps() {
+        try {
+            const r = await fetch(`${API}/api/steps`);
+            const data = await r.json();
+            for (const s of (data.steps || [])) {
+                steps.push(s);
+                renderStep(s);
+            }
+            updateCounters();
+        } catch { /* server not yet up */ }
+    }
+
+    // ─── Boot ─────────────────────────────────────────────────────────
+    connectSSE();
+    loadExistingSteps();
+    fetchStats();
+    setInterval(fetchStats, 5000);
+</script>
 </body>
 </html>
