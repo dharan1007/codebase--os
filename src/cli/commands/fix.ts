@@ -73,7 +73,6 @@ export function fixCommand(): Command {
             const failureStore = new FailureStore(db);
             const failureManager = new FailureManager(db, history, failureStore);
             const testRunner = new TestRunner(config.rootDir, graph);
-            failureManager.init();
 
             const concurrency = 3; // Lower concurrency for stability
             const results: any[] = [];

@@ -19,24 +19,6 @@ export interface EvaluationMetric {
 export class EvalTracker {
     constructor(private db: Database) {}
 
-    init() {
-        this.db.prepare(`
-            CREATE TABLE IF NOT EXISTS eval_metrics (
-                id TEXT PRIMARY KEY,
-                sessionId TEXT NOT NULL,
-                taskProfile TEXT NOT NULL,
-                durationMs INTEGER NOT NULL,
-                tokensUsed INTEGER NOT NULL,
-                successRate REAL NOT NULL,
-                regressionDetected INTEGER NOT NULL,
-                costEstimate REAL NOT NULL,
-                provider TEXT NOT NULL,
-                model TEXT NOT NULL,
-                timestamp INTEGER NOT NULL
-            )
-        `).run();
-    }
-
     trackSession(
         sessionId: string,
         taskProfile: string,

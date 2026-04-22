@@ -3,7 +3,7 @@ import { logger } from '../../../utils/logger.js';
 import { RateLimiter } from '../../../utils/RateLimiter.js';
 import { classifyProviderError, ProviderError } from './ProviderError.js';
 
-const MAX_RETRIES = 4;
+const MAX_RETRIES = 1;
 const BASE_DELAY_MS = 1000;
 
 export class OpenRouterProvider implements AIProvider {

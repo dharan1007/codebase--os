@@ -11,17 +11,6 @@ export interface CachedResponse {
 export class ResponseCache {
     constructor(private db: Database) {}
 
-    init() {
-        this.db.prepare(`
-            CREATE TABLE IF NOT EXISTS response_cache (
-                queryHash TEXT PRIMARY KEY,
-                taskProfile TEXT NOT NULL,
-                response TEXT NOT NULL,
-                timestamp INTEGER NOT NULL
-            )
-        `).run();
-    }
-
     get(queryHash: string): string | null {
         try {
             const row = this.db.prepare('SELECT response FROM response_cache WHERE queryHash = ?').get(queryHash) as any;

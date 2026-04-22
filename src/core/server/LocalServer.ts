@@ -7,7 +7,18 @@ import { FailureStore } from '../failure/FailureStore.js';
 import { ResourceMonitor } from '../orchestrator/ResourceMonitor.js';
 
 // Resolve UI root relative to the installed package — works from both src and dist
-const UI_ROOT = path.join(__dirname, '../../ui');
+// Resolve UI root relative to the installed package — works from both src and dist
+let UI_ROOT = path.join(__dirname, '../../ui');
+// Fast-failover for development: check src/ui directly if dist/ui is missing or vice-versa
+if (!fs.existsSync(UI_ROOT)) {
+    const alternative = path.join(process.cwd(), 'src', 'ui');
+    if (fs.existsSync(alternative)) {
+        UI_ROOT = alternative;
+    } else {
+        const distAlt = path.join(process.cwd(), 'dist', 'ui');
+        if (fs.existsSync(distAlt)) UI_ROOT = distAlt;
+    }
+}
 
 export class LocalServer extends EventEmitter {
     private server: http.Server;
@@ -148,10 +159,19 @@ export class LocalServer extends EventEmitter {
         }
 
         // --- Serve static UI files ---
-        const urlPath = req.url === '/' ? 'index.html' : (req.url ?? 'index.html');
-        let filePath = path.join(UI_ROOT, urlPath);
+        // Handle /favicon.ico request gracefully even if not exist
+        if (req.url === '/favicon.ico') {
+            res.writeHead(204); // No Content
+            return res.end();
+        }
 
-        const ext = path.extname(filePath);
+        let urlPath = req.url === '/' ? 'index.html' : (req.url ?? 'index.html');
+        // Sanitize: remove leading slashes and query params to avoid path traversal/nonsense
+        urlPath = urlPath.split('?')[0].replace(/^\/+/, '');
+
+        const filePath = path.join(UI_ROOT, urlPath);
+
+        const ext = path.extname(filePath).toLowerCase();
         const mimeMap: Record<string, string> = {
             '.html': 'text/html',
             '.js': 'text/javascript',
@@ -159,20 +179,26 @@ export class LocalServer extends EventEmitter {
             '.json': 'application/json',
             '.png': 'image/png',
             '.svg': 'image/svg+xml',
+            '.ico': 'image/x-icon',
         };
         const contentType = mimeMap[ext] ?? 'text/plain';
 
         fs.readFile(filePath, (err, content) => {
             if (err) {
-                // Fallback to index.html for SPA routing
-                fs.readFile(path.join(UI_ROOT, 'index.html'), (err2, fallback) => {
-                    if (err2) {
-                        res.writeHead(404);
-                        return res.end('Not Found');
-                    }
-                    res.writeHead(200, { 'Content-Type': 'text/html' });
-                    res.end(fallback, 'utf-8');
-                });
+                // Fallback to index.html for SPA routing only for extensionless or .html paths
+                if (ext === '' || ext === '.html') {
+                    fs.readFile(path.join(UI_ROOT, 'index.html'), (err2, fallback) => {
+                        if (err2) {
+                            res.writeHead(404);
+                            return res.end('Not Found');
+                        }
+                        res.writeHead(200, { 'Content-Type': 'text/html' });
+                        res.end(fallback, 'utf-8');
+                    });
+                } else {
+                    res.writeHead(404);
+                    res.end('Not Found');
+                }
             } else {
                 res.writeHead(200, { 'Content-Type': contentType });
                 res.end(content, 'utf-8');

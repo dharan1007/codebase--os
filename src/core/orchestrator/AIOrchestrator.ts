@@ -1,81 +1,129 @@
-import type { AIProvider, ModelRequest, ModelResponse, ProjectConfig } from '../../types/index.js';
+import type { AIProvider, ModelRequest, ModelResponse, ProjectConfig, AIProviderKind } from '../../types/index.js';
 import { ModelRouter } from './ModelRouter.js';
+import { ProviderRouter } from './ProviderRouter.js';
 import { ResponseCache } from '../context/ResponseCache.js';
 import { ContextBuilder } from '../context/ContextBuilder.js';
+import { RequestQueue } from './RequestQueue.js';
 import { logger } from '../../utils/logger.js';
-import { AIProviderFactory } from '../ai/AIProviderFactory.js';
+import { ProviderRegistry } from '../ai/ProviderRegistry.js';
+import { ProviderHealthTracker } from './ProviderHealthTracker.js';
+import { withTimeout } from '../../utils/TimeoutWrapper.js';
+import { PayloadOptimizer } from './PayloadOptimizer.js';
+import crypto from 'crypto';
 
 export class AIOrchestrator {
-    private router: ModelRouter;
+    private modelRouter: ModelRouter;
+    private providerRouter: ProviderRouter;
     private cache: ResponseCache;
     private contextBuilder: ContextBuilder;
+    private health: ProviderHealthTracker;
+    private registry: ProviderRegistry;
 
     constructor(private config: ProjectConfig, dependencies: {
         router: ModelRouter,
         cache: ResponseCache,
         contextBuilder: ContextBuilder
     }) {
-        this.router = dependencies.router;
+        this.modelRouter = dependencies.router;
+        this.providerRouter = new ProviderRouter(config);
         this.cache = dependencies.cache;
         this.contextBuilder = dependencies.contextBuilder;
+        this.health = ProviderHealthTracker.getInstance();
+        this.registry = ProviderRegistry.getInstance();
     }
 
     /**
-     * Standardized execution method - The Brain of Codebase OS.
+     * Executes an AI request with True Multi-Provider Resilience.
+     * Pivot strategy: Provider-first, then Model-first.
      */
     async execute(request: ModelRequest): Promise<ModelResponse> {
-        // 1. Response Caching
+        // 1. Check Cache
         const cacheKey = this.generateCacheKey(request);
         const cached = await this.cache.get(cacheKey);
-        if (cached) {
-            logger.info('Orchestrator: Cache hit', { taskType: request.taskType });
-            return JSON.parse(cached);
-        }
+        if (cached) return JSON.parse(cached);
 
-        // 2. Context Intelligence (RAG + Compression)
+        // 2. Prepare Context (with Traffic Shaping / Payload Optimization)
         const enrichedContext = await this.contextBuilder.enrich(request.context, request.filePath);
-        const compressedContext = this.compress(enrichedContext);
-        request.context = compressedContext;
-
-        // 3. Dynamic Selection
-        const providerConfigs = this.router.selectProvider(request);
+        request.context = enrichedContext;
         
-        // 4. Fallback Chain Execution
+        // Shape traffic: Trim context if it's too 'hot' (preemptive 429 protection)
+        const optimizedRequest = PayloadOptimizer.optimize(request);
+        request.context = this.compress(optimizedRequest.context);
+
+        // 3. Execution via Priority Queue
+        return RequestQueue.getInstance().enqueue(async () => {
+            return this.executeWithMultiProviderFallback(request, cacheKey);
+        }, request.priority === 'high' ? 10 : 5);
+    }
+
+    private async executeWithMultiProviderFallback(request: ModelRequest, cacheKey: string): Promise<ModelResponse> {
+        const providerSequence = this.providerRouter.getProviderSequence();
         let lastError: Error | null = null;
-        for (const providerConfig of providerConfigs) {
+
+        for (const providerKind of providerSequence) {
+            // Get best models available for THIS specific provider
+            const modelChain = this.modelRouter.selectProvider(request)
+                .filter(sel => sel.provider === providerKind);
+            
+            if (modelChain.length === 0) {
+                logger.debug(`[Orchestrator] Provider ${providerKind} skipped: No active models available (Cooldown/No Keys).`);
+                continue;
+            }
+
+            const selection = modelChain[0];
+            const start = Date.now();
+
             try {
-                logger.info(`Orchestrator: Executing via ${providerConfig.provider} (${providerConfig.model})`);
+                const provider = this.registry.getProvider(providerKind, undefined, selection.model);
                 
-                const provider = AIProviderFactory.createRaw(providerConfig.provider as any, providerConfig.model);
+                // Wrap execution with hard timeout to prevent indefinite hangs
+                const result = await withTimeout(
+                    (signal) => provider.execute({ ...request, signal } as any),
+                    45000,
+                    `AI:${providerKind}:${selection.model}`
+                );
                 
-                // Finalize request for this specific model
-                const finalizedRequest = { ...request, modelOverride: providerConfig.model };
+                // Track Provider Success
+                this.health.reportSuccess(providerKind);
                 
-                const result = await provider.execute(finalizedRequest);
+                // Track Model Success (Legacy/Granular tracking)
+                // HotHealthTracker.getInstance().reportSuccess(providerKind, selection.model, Date.now() - start);
                 
-                // Store in cache
                 this.cache.set(cacheKey, request.taskType, JSON.stringify(result));
-                
                 return result;
             } catch (err: any) {
                 lastError = err;
-                logger.warn(`Orchestrator: Provider ${providerConfig.provider} failed.`, { error: err.message });
-                // Fallthrough to next in chain
+                
+                // CRITICAL: Report failure to ProviderHealthTracker to trigger Circuit Breaker
+                this.health.reportFailure(providerKind, err);
+                
+                logger.warn(`[Orchestrator] Provider ${providerKind} failed. PIVOTING to next provider...`, {
+                    error: err.message,
+                    model: selection.model
+                });
+
+                // Immediately move to the NEXT provider in the sequence 
+                // instead of retrying another model in the same failing provider.
+                continue;
             }
         }
 
-        throw new Error(`Orchestrator: All providers in chain failed. Last error: ${lastError?.message}`);
+        throw new Error(`[Orchestrator] Global Outage: All ${providerSequence.length} providers exhausted. Last error: ${lastError?.message}`);
     }
-
     private generateCacheKey(request: ModelRequest): string {
-        return `ai:${request.taskType}:${Buffer.from(request.context).toString('base64').slice(0, 32)}`;
+        const payload = JSON.stringify({
+            taskType: request.taskType,
+            context: request.context,
+            filePath: request.filePath,
+            maxTokens: request.maxTokens
+        });
+        return `ai:v2:${request.taskType}:${crypto.createHash('sha256').update(payload).digest('hex')}`;
     }
 
     private compress(context: string): string {
-        // Remove excessive whitespace and repetitive noise (logs normally have timestamps, etc.)
         return context
             .replace(/\s+/g, ' ')
-            .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/g, '[TS]') // Normalize timestamps
-            .slice(0, 30000); // Guard rails
+            .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/g, '[TS]')
+            .slice(0, 30000);
     }
 }

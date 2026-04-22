@@ -402,7 +402,6 @@ export class ProjectScanner {
         if (!this.aiProvider) return;
         try {
             const embeddingIndex = new EmbeddingIndex(this.db, this.aiProvider);
-            embeddingIndex.init();
 
             // Stream graph nodes into the embedding index in batches — never load all
             const EMBED_BATCH = 100;

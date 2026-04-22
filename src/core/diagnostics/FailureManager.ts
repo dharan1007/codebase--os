@@ -23,10 +23,6 @@ export class FailureManager {
         private store: FailureStore
     ) {}
 
-    init() {
-        this.store.init();
-    }
-
     async handleFailure(category: FailureCategory, filePath: string, details: string): Promise<FailureReport> {
         // Capture context for the intelligence system
         let context = '[No context available]';

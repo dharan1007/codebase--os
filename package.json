@@ -15,7 +15,7 @@
     "cos": "dist/cli/index.js"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "tsc --project tsconfig.json && node scripts/copy-ui.js",
     "dev": "ts-node --project tsconfig.json src/cli/index.ts",
     "start": "node dist/cli/index.js",
     "typecheck": "tsc --project tsconfig.json --noEmit",

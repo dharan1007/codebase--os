@@ -14,6 +14,15 @@ OUTPUT FORMAT:
 - Second, the complete file content.
 - Third, a <REFLECTION> block confirming safety.`,
 
+    designPrinciples: (): string => `
+PREMIUM UI & AESTHETIC PRINCIPLES (SOVEREIGN):
+1. VIBRANT MODERNISM: Avoid generic colors. Use curated HSL palettes, subtle gradients, and glassmorphism (backdrop-filter: blur).
+2. DYNAMIC FEEDBACK: Every action MUST have a hover/active state or micro-animation.
+3. PREMIUM TYPOGRAPHY: Scale font weights carefully. Use Inter for UI and Outfit for headings.
+4. SPATIAL DEPTH: Use tiered z-indexes and soft shadows to create a layered workspace.
+5. NO PLACEHOLDERS: Implement full, production-ready CSS.
+`,
+
     agentSystemPrompt: (rootDir: string): string => `You are a Sovereign Principal Engineering Agent. You OWN this codebase.
 Your goal is to evolve and maintain this system with 100% architectural fidelity and zero build errors.
 

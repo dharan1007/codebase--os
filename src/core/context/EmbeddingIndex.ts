@@ -58,29 +58,8 @@ const SKETCH_DIM = 16;
 const OVER_FETCH = 10;
 
 export class EmbeddingIndex {
-    constructor(private db: Database, private ai: AIProvider) {}
-
-    init(): void {
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS embeddings_cache (
-                id TEXT PRIMARY KEY,
-                filePath TEXT NOT NULL,
-                contentHash TEXT NOT NULL,
-                content TEXT NOT NULL,
-                embeddingBlob BLOB NOT NULL,
-                sketchBlob BLOB,
-                dim INTEGER NOT NULL DEFAULT 0,
-                updatedAt INTEGER NOT NULL DEFAULT 0
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_embed_file_hash
-                ON embeddings_cache(filePath, contentHash);
-
-            CREATE INDEX IF NOT EXISTS idx_embed_filepath
-                ON embeddings_cache(filePath);
-        `);
-
-        // Migrate existing rows that lack the new columns
+    constructor(private db: Database, private ai: AIProvider) {
+        // Migrate existing rows if needed
         this.runMigration();
     }
 

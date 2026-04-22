@@ -6,26 +6,6 @@ import { logger } from '../../utils/logger.js';
 export class FailureStore {
     constructor(private db: Database) {}
 
-    init() {
-        this.db.prepare(`
-            CREATE TABLE IF NOT EXISTS failure_snapshots (
-                id TEXT PRIMARY KEY,
-                category TEXT NOT NULL,
-                filePath TEXT NOT NULL,
-                signature TEXT NOT NULL,
-                message TEXT NOT NULL,
-                stackTrace TEXT,
-                contextBefore TEXT NOT NULL,
-                timestamp INTEGER NOT NULL,
-                frequency INTEGER DEFAULT 1
-            )
-        `).run();
-
-        this.db.prepare(`
-            CREATE INDEX IF NOT EXISTS idx_failure_signature ON failure_snapshots(signature);
-        `).run();
-    }
-
     async record(category: FailureCategory, filePath: string, message: string, context: string, stack?: string): Promise<FailureSnapshot> {
         const signature = this.generateSignature(message, filePath);
         

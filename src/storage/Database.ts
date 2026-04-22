@@ -147,6 +147,34 @@ export class Database {
         summary TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS failure_snapshots (
+        id TEXT PRIMARY KEY,
+        category TEXT NOT NULL,
+        filePath TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        message TEXT NOT NULL,
+        stackTrace TEXT,
+        contextBefore TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        frequency INTEGER DEFAULT 1
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_failure_signature ON failure_snapshots(signature);
+
+      CREATE TABLE IF NOT EXISTS eval_metrics (
+        id TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        taskProfile TEXT NOT NULL,
+        durationMs INTEGER NOT NULL,
+        tokensUsed INTEGER NOT NULL,
+        successRate REAL NOT NULL,
+        regressionDetected INTEGER NOT NULL,
+        costEstimate REAL NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        timestamp INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS agent_checkpoints (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -160,6 +188,30 @@ export class Database {
 
       CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_session ON agent_checkpoints(session_id);
       CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_status ON agent_checkpoints(status);
+
+      CREATE TABLE IF NOT EXISTS response_cache (
+        queryHash TEXT PRIMARY KEY,
+        taskProfile TEXT NOT NULL,
+        response TEXT NOT NULL,
+        timestamp INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS embeddings_cache (
+        id TEXT PRIMARY KEY,
+        filePath TEXT NOT NULL,
+        contentHash TEXT NOT NULL,
+        content TEXT NOT NULL,
+        embeddingBlob BLOB NOT NULL,
+        sketchBlob BLOB,
+        dim INTEGER NOT NULL DEFAULT 0,
+        updatedAt INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_embed_file_hash
+        ON embeddings_cache(filePath, contentHash);
+
+      CREATE INDEX IF NOT EXISTS idx_embed_filepath
+        ON embeddings_cache(filePath);
     `);
 
         // Migration: Add embedding column if it doesn't exist

@@ -30,9 +30,14 @@ import { computeDiff } from '../../utils/diff.js';
 import { TopologicalPlanner } from './TopologicalPlanner.js';
 import { SessionMemory } from '../context/SessionMemory.js';
 import { CognitiveState } from '../context/CognitiveState.js';
-import ora from 'ora';
 import path from 'path';
 import fs from 'fs';
+import { AgentController, type AgentBudget } from './AgentController.js';
+import { ContextManager } from '../context/ContextManager.js';
+import { ModelRegistry } from './ModelRegistry.js';
+import { RequestQueue } from '../orchestrator/RequestQueue.js';
+import { WatchdogService } from '../orchestrator/WatchdogService.js';
+import { withTimeout } from '../../utils/TimeoutWrapper.js';
 
 export interface AgentState {
     filesRead: string[];
@@ -76,11 +81,14 @@ export class AgentLoop {
     private evalTracker: EvalTracker;
     private localServer: LocalServer;
     private fileModifications = new Map<string, number>();
+    private actionRepetition = new Map<string, number>();
     private filesReadThisSession = new Set<string>();
     private startTime: number = 0;
     private failureManager: FailureManager;
     private rootCaseAnalyzer: RootCauseAnalyzer;
     private cognitiveState!: CognitiveState;
+    private controller!: AgentController;
+    private contextManager!: ContextManager;
 
     // Context budget constants
     // We keep seed + last RECENT_WINDOW raw messages.
@@ -105,7 +113,6 @@ export class AgentLoop {
         this.decisionEngine = new DecisionEngine(graph);
         this.sandboxManager = new SandboxManager(rootDir);
         this.evalTracker = new EvalTracker(db);
-        this.evalTracker.init();
         this.cognitiveState = new CognitiveState(sessionId, db, provider);
         this.cognitiveState.restore();
 
@@ -113,6 +120,17 @@ export class AgentLoop {
         const gitManager = new GitManager(rootDir);
         this.failureManager = failureIntelligence?.manager || new FailureManager(db, history, failureStore);
         this.rootCaseAnalyzer = failureIntelligence?.rca || new RootCauseAnalyzer(provider, gitManager, graph);
+
+        // Initialize regulation components
+        const budget: AgentBudget = {
+            maxSteps: 60,
+            maxTokens: 500000, // 500k token session budget
+            maxCost: 2.0 // $2.00 hard cap per session
+        };
+        this.controller = new AgentController(budget);
+        
+        const modelId = ModelRegistry.resolve('reasoning-high', provider.kind as any);
+        this.contextManager = new ContextManager(modelId);
     }
 
     async run(
@@ -129,15 +147,22 @@ export class AgentLoop {
         const onStep = options.onStep;
         this.startTime = Date.now();
 
+        // Register with Watchdog
+        WatchdogService.getInstance().register(this.sessionId);
+
         this.steps = options.initialSteps || [];
         this.filesWritten = options.initialFiles || [];
         const messages: Array<{ role: 'user' | 'assistant'; content: string }> = options.initialMessages || [];
 
         if (messages.length === 0) {
             const bootstrapContext = await this.buildBootstrapContext(task);
+            const isDesignTask = /ui|style|css|aesthetic|design|layout|frontend/i.test(task);
+            const designGems = isDesignTask ? `\n\n[DESIGN GUIDELINES]:\n${PromptTemplates.designPrinciples()}` : '';
+
             const seedPrompt =
                 `TASK: ${task}\n\n` +
                 `[CODEBASE CONTEXT — read these files before making any changes]:\n${bootstrapContext}\n\n` +
+                designGems +
                 `RULE: For any EXISTING file, emit a patch_file action with a unified diff. ` +
                 `For NEW files, emit a write_file action with full content. ` +
                 `Begin with a read_file or list_files action to confirm your understanding.`;
@@ -148,52 +173,65 @@ export class AgentLoop {
         let lastSummary = 'Agent paused.';
 
         while (stepCount < this.maxSteps) {
+            try {
+                this.controller.checkpoint();
+                // Pulse Watchdog at the start of every step
+                WatchdogService.getInstance().pulse(this.sessionId, 'EXECUTING');
+            } catch (err: any) {
+                logger.error(`[AgentLoop] Budget halted execution: ${err.message}`);
+                break;
+            }
+            
             stepCount++;
 
-            // ── COGNITIVE STATE (replaces the lossy sliding window) ──────────
-            // Tick the cognitive state: it will LLM-compress history every
-            // COMPRESS_EVERY steps if the compressible zone is large enough.
-            // The tick returns a persistent context header that is injected
-            // into every LLM prompt so critical knowledge never drops out.
+            // ── COGNITIVE STATE ──────────────────────────────────────────────
             const compressibleMessages = messages.slice(
                 AgentLoop.SEED_MESSAGES,
                 Math.max(AgentLoop.SEED_MESSAGES, messages.length - AgentLoop.RECENT_WINDOW)
             );
             const cognitiveHeader = await this.cognitiveState.tick(
                 stepCount, compressibleMessages, task,
-                (summary) => logger.debug('CognitiveState compressed', { summaryLen: summary.length })
+                (summary: string) => logger.debug('CognitiveState compressed', { summaryLen: summary.length })
             );
 
-            // Trim messages to seed + cognitive header + recent window
-            if (messages.length > AgentLoop.SEED_MESSAGES + AgentLoop.RECENT_WINDOW) {
-                const seed = messages.slice(0, AgentLoop.SEED_MESSAGES);
-                const recent = messages.slice(-AgentLoop.RECENT_WINDOW);
-                messages.splice(0, messages.length,
-                    ...seed,
-                    { role: 'user', content: cognitiveHeader },
-                    ...recent
-                );
-            }
-
+            // ── CONTEXT REGULATION [NEW] ────────────────────────────────────
+            // Instead of a lossy splice, we use the ContextManager to fit within model constraints
+            messages.push({ role: 'user', content: cognitiveHeader }); // Inject summary
+            const regulatedMessages = this.contextManager.regulate(messages as any);
+            
             let response = '';
-            try {
-                const systemPrompt = PromptTemplates.agentSystemPrompt(this.rootDir);
-                const prompt = messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+            let orchestratorAttempts = 0;
+            const MAX_ORCHESTRATOR_ATTEMPTS = 3;
 
-                const result = await this.provider.execute({
-                    taskType: 'reasoning',
-                    priority: 'high',
-                    context: prompt,
-                    systemPrompt,
-                    maxTokens: 4000,
-                });
-                response = result.content;
-                messages.push({ role: 'assistant', content: response });
-            } catch (err: any) {
-                if (err.message?.includes('Quota')) return this.finalize(lastSummary, stepCount, false, messages, true);
-                if (err.message?.includes('Outage')) return this.finalize(lastSummary, stepCount, true, messages);
-                logger.error('Agent loop provider error', { error: String(err) });
-                break;
+            while (orchestratorAttempts < MAX_ORCHESTRATOR_ATTEMPTS) {
+                try {
+                    const systemPrompt = PromptTemplates.agentSystemPrompt(this.rootDir);
+                    const results = await this.provider.execute({
+                        taskType: 'reasoning',
+                        priority: 'high',
+                        context: regulatedMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n'),
+                        systemPrompt,
+                        maxTokens: 4000,
+                    });
+                    
+                    response = results.content;
+                    this.controller.recordUsage(results.usage.totalTokens, 0);
+                    messages.push({ role: 'assistant', content: response });
+                    break; // Success!
+                } catch (err: any) {
+                    orchestratorAttempts++;
+                    const isQuota = err.message?.includes('Quota') || err.message?.includes('429');
+                    
+                    if (orchestratorAttempts >= MAX_ORCHESTRATOR_ATTEMPTS) {
+                        if (isQuota) return this.finalize(lastSummary, stepCount, false, messages, true);
+                        logger.error('[AgentLoop] Orchestrator exhausted all fallbacks and retries.', { error: String(err) });
+                        return this.finalize(lastSummary, stepCount, true, messages);
+                    }
+
+                    const delay = isQuota ? 10000 : 3000;
+                    logger.warn(`[AgentLoop] Cloud congestion. Attempt ${orchestratorAttempts}/${MAX_ORCHESTRATOR_ATTEMPTS}. Waiting ${delay/1000}s...`);
+                    await new Promise(r => setTimeout(r, delay));
+                }
             }
 
             // Parse + validate action with Zod
@@ -211,6 +249,23 @@ export class AgentLoop {
                         `{ "tool": "<tool_name>", "args": { ... }, "reasoning": "...", "tasklist": [...] }\n` +
                         `Valid tools: read_file, write_file, patch_file, delete_file, move_file, list_files, run_shell, search_code, find_references, pause_and_ask, finish`,
                 });
+                continue;
+            }
+
+            // ── STAGNATION & REPETITION DETECTION ────────────────────────────
+            const actionKey = `${action.tool}:${JSON.stringify(action.args)}`;
+            const actionCount = (this.actionRepetition.get(actionKey) || 0) + 1;
+            this.actionRepetition.set(actionKey, actionCount);
+
+            if (actionCount >= 3) {
+                messages.push({
+                    role: 'user',
+                    content:
+                        `[STAGNATION ALERT]: You have called "${action.tool}" with these exact arguments ${actionCount} times. ` +
+                        `You are stuck in a reasoning loop. DO NOT repeat the same tool call. ` +
+                        `If you are stuck, read a different file, use search_code, or use pause_and_ask for manual guidance.`,
+                });
+                this.actionRepetition.set(actionKey, 0); // Reset for next cycle
                 continue;
             }
 
@@ -271,7 +326,12 @@ export class AgentLoop {
             let result: ToolResult;
             let diffOutput: string | undefined;
             try {
-                result = await this.executeTool(action, onStep, stepCount, this.tasklist);
+                // Wrap tool execution with safety timeout (90s default)
+                result = await withTimeout(
+                    () => this.executeTool(action, onStep, stepCount, this.tasklist),
+                    90000,
+                    `Tool:${action.tool}`
+                );
 
                 // Capture diff for write operations to show in UI/CLI
                 if (result.success && (action.tool === 'write_file' || action.tool === 'patch_file')) {
@@ -350,6 +410,7 @@ export class AgentLoop {
             await new Promise(r => setTimeout(r, 800));
         }
 
+        WatchdogService.getInstance().unregister(this.sessionId);
         return this.finalize(lastSummary, stepCount, false, messages);
     }
 
