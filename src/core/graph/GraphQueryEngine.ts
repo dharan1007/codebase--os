@@ -80,8 +80,9 @@ export class GraphQueryEngine {
         const allNodes = Array.from(this.graph.nodes.values());
 
         for (const node of allNodes) {
-            const inDegree = this.graph.getIncomingEdges(node.id).length;
-            const outDegree = this.graph.getOutgoingEdges(node.id).length;
+            // Use adjacency maps directly — O(1) per node instead of O(e) edge scans
+            const inDegree = (this.graph.reverseAdjacency.get(node.id) ?? new Set()).size;
+            const outDegree = (this.graph.adjacency.get(node.id) ?? new Set()).size;
             scores.push({
                 nodeId: node.id,
                 nodeName: node.name,

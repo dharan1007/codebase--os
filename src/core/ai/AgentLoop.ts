@@ -29,6 +29,7 @@ import { ResourceMonitor } from '../orchestrator/ResourceMonitor.js';
 import { computeDiff } from '../../utils/diff.js';
 import { TopologicalPlanner } from './TopologicalPlanner.js';
 import { SessionMemory } from '../context/SessionMemory.js';
+import { CognitiveState } from '../context/CognitiveState.js';
 import ora from 'ora';
 import path from 'path';
 import fs from 'fs';
@@ -75,13 +76,17 @@ export class AgentLoop {
     private evalTracker: EvalTracker;
     private localServer: LocalServer;
     private fileModifications = new Map<string, number>();
+    private filesReadThisSession = new Set<string>();
     private startTime: number = 0;
     private failureManager: FailureManager;
     private rootCaseAnalyzer: RootCauseAnalyzer;
+    private cognitiveState!: CognitiveState;
 
-    // Sliding window constants
-    private static readonly SEED_MESSAGES = 1;     // always keep the initial task message
-    private static readonly WINDOW_SIZE = 10;       // keep last N tool-result exchanges
+    // Context budget constants
+    // We keep seed + last RECENT_WINDOW raw messages.
+    // Older messages beyond this are only available via CognitiveState summary.
+    private static readonly SEED_MESSAGES = 1;
+    private static readonly RECENT_WINDOW = 12;
 
     constructor(
         private provider: AIProvider,
@@ -97,10 +102,12 @@ export class AgentLoop {
         this.checkpointManager = new CheckpointManager(db);
         this.localServer = new LocalServer(failureStore, resourceMonitor);
         this.localServer.start();
-        this.decisionEngine = new DecisionEngine(graph, this.localServer);
+        this.decisionEngine = new DecisionEngine(graph);
         this.sandboxManager = new SandboxManager(rootDir);
         this.evalTracker = new EvalTracker(db);
         this.evalTracker.init();
+        this.cognitiveState = new CognitiveState(sessionId, db, provider);
+        this.cognitiveState.restore();
 
         const history = new ChangeHistory(db);
         const gitManager = new GitManager(rootDir);
@@ -143,16 +150,27 @@ export class AgentLoop {
         while (stepCount < this.maxSteps) {
             stepCount++;
 
-            // Sliding window: always keep seed[0] + last WINDOW_SIZE messages
-            if (messages.length > AgentLoop.SEED_MESSAGES + AgentLoop.WINDOW_SIZE) {
+            // ── COGNITIVE STATE (replaces the lossy sliding window) ──────────
+            // Tick the cognitive state: it will LLM-compress history every
+            // COMPRESS_EVERY steps if the compressible zone is large enough.
+            // The tick returns a persistent context header that is injected
+            // into every LLM prompt so critical knowledge never drops out.
+            const compressibleMessages = messages.slice(
+                AgentLoop.SEED_MESSAGES,
+                Math.max(AgentLoop.SEED_MESSAGES, messages.length - AgentLoop.RECENT_WINDOW)
+            );
+            const cognitiveHeader = await this.cognitiveState.tick(
+                stepCount, compressibleMessages, task,
+                (summary) => logger.debug('CognitiveState compressed', { summaryLen: summary.length })
+            );
+
+            // Trim messages to seed + cognitive header + recent window
+            if (messages.length > AgentLoop.SEED_MESSAGES + AgentLoop.RECENT_WINDOW) {
                 const seed = messages.slice(0, AgentLoop.SEED_MESSAGES);
-                const recent = messages.slice(-AgentLoop.WINDOW_SIZE);
-                const dropped = messages.length - AgentLoop.SEED_MESSAGES - AgentLoop.WINDOW_SIZE;
-                messages.splice(
-                    0,
-                    messages.length,
+                const recent = messages.slice(-AgentLoop.RECENT_WINDOW);
+                messages.splice(0, messages.length,
                     ...seed,
-                    { role: 'user', content: `[MEMORY COMPACT]: ${dropped} older exchanges omitted. Step ${stepCount - 1} of ${this.maxSteps}. Continuing task: "${task}"` },
+                    { role: 'user', content: cognitiveHeader },
                     ...recent
                 );
             }
@@ -223,14 +241,23 @@ export class AgentLoop {
                 }
 
                 let diffLines = 0;
+                let newContent: string | undefined;
                 if (action.tool === 'patch_file') {
                     const diff = action.args['diff'] || '';
                     diffLines = diff.split('\n').filter(l => l.startsWith('+') || l.startsWith('-')).length;
                 } else if (action.tool === 'write_file') {
-                    diffLines = (action.args['content'] || '').split('\n').length;
+                    newContent = action.args['content'] || '';
+                    diffLines = newContent.split('\n').length;
                 }
 
-                const evaluation = this.decisionEngine.evaluate(action.tool, targetPath, diffLines, 0.8);
+                // Derive real confidence from agent behavior — no more hardcoded 0.8
+                const modCount = this.fileModifications.get(targetPath) || 0;
+                const hasReadFile = this.filesReadThisSession.has(targetPath);
+                const confidence = DecisionEngine.deriveConfidence(hasReadFile, modCount, stepCount);
+
+                const evaluation = this.decisionEngine.evaluate(
+                    action.tool, targetPath, diffLines, confidence, newContent
+                );
                 allowed = await this.decisionEngine.enforce(action.tool, targetPath, evaluation);
             }
 
@@ -285,6 +312,18 @@ export class AgentLoop {
             }
 
             this.steps.push({ step: stepCount, action, result });
+
+            // Track files read/modified in both the local set AND the CognitiveState
+            if (action.tool === 'read_file' && result.success && action.args['path']) {
+                this.filesReadThisSession.add(action.args['path']);
+                this.cognitiveState.recordFileRead(action.args['path']);
+            }
+            if ((action.tool === 'write_file' || action.tool === 'patch_file') && result.success && action.args['path']) {
+                this.cognitiveState.recordFileModified(action.args['path']);
+            }
+            // Persist cognitive state to SQLite every step so crash recovery works
+            this.cognitiveState.persist();
+
             if (onStep) await onStep(stepCount, action, result, this.tasklist, diffOutput);
 
             // Emit step to dashboard

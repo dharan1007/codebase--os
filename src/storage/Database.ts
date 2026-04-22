@@ -31,11 +31,22 @@ export class Database {
         }
         const dbPath = path.join(dataDir, 'cos.db');
         this.db = new BetterSQLite3(dbPath);
+
+        // WAL mode: readers never block writers, writers never block readers.
         this.db.pragma('journal_mode = WAL');
+        // busy_timeout: if a write lock is held by another process, wait up to
+        // 5 seconds before throwing SQLITE_BUSY. Prevents cascading failures in
+        // multi-process (e.g., watcher + scanner running simultaneously) scenarios.
+        this.db.pragma('busy_timeout = 5000');
         this.db.pragma('foreign_keys = ON');
+        // NORMAL: flush to OS buffer (not disk) after each write. WAL makes this safe.
         this.db.pragma('synchronous = NORMAL');
+        // 32MB page cache — critical for large graph queries hitting many pages.
         this.db.pragma('cache_size = -32000');
         this.db.pragma('temp_store = MEMORY');
+        // Memory-mapped I/O for sequential scans (embedding blobs, large queries)
+        // 512MB mmap window. SQLite reads this as virtual memory, not heap.
+        this.db.pragma('mmap_size = 536870912');
         this.initialize();
         activeInstances.add(this);
         logger.debug('Database initialized', { path: dbPath });

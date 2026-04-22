@@ -3,7 +3,8 @@ import fs from 'fs';
 import type { FileAnalysis, Layer, Language } from '../../types/index.js';
 import { parseFile } from './ASTParser.js';
 import { detectLanguage } from '../../utils/ast.js';
-import { normalizePath, resolveNormalized } from '../../utils/paths.js';
+import { normalizePath } from '../../utils/paths.js';
+import { ImportResolver } from './ImportResolver.js';
 
 const LAYER_PATTERNS: Array<{ pattern: RegExp; layer: Layer }> = [
     // Database
@@ -54,10 +55,16 @@ export function detectLayer(filePath: string, configuredLayers?: Record<string, 
 }
 
 export class FileAnalyzer {
+    private resolver: ImportResolver;
+
     constructor(
         private rootDir: string,
         private configuredLayers?: Record<string, string[]>
-    ) { }
+    ) {
+        // ImportResolver is instantiated once per FileAnalyzer instance.
+        // It caches tsconfig paths and workspace packages at construction time — O(1) per resolve call.
+        this.resolver = new ImportResolver(rootDir);
+    }
 
     analyze(filePath: string): FileAnalysis {
         const normalizedPath = normalizePath(filePath);
@@ -84,37 +91,16 @@ export class FileAnalyzer {
         };
     }
 
+    /**
+     * Resolves an import source string to an absolute file path.
+     * Delegates to ImportResolver which handles:
+     *   - Relative imports (./foo, ../bar)
+     *   - tsconfig path aliases (@/components, ~/utils)
+     *   - Workspace/monorepo packages
+     *   - Barrel index files (src/utils → src/utils/index.ts)
+     *   - ESM extension compatibility (.js → .ts)
+     */
     resolveImportPath(importSource: string, fromFile: string): string | null {
-        if (!importSource.startsWith('.')) return null;
-
-        const dir = path.dirname(fromFile);
-        let resolved = resolveNormalized(dir, importSource);
-
-        // ESM compatibility: handle .js/.jsx extensions in imports that actually point to .ts/.tsx files
-        const jsExtMatch = importSource.match(/\.(js|jsx)$/);
-        let tsResolved = resolved;
-        if (jsExtMatch) {
-            tsResolved = resolved.slice(0, -jsExtMatch[0].length);
-        }
-
-        const candidates = [
-            resolved,
-            `${tsResolved}.ts`,
-            `${tsResolved}.tsx`,
-            tsResolved,
-            `${resolved}.ts`,
-            `${resolved}.tsx`,
-            path.join(resolved, 'index.ts').replace(/\\/g, '/'),
-            path.join(resolved, 'index.tsx').replace(/\\/g, '/'),
-            path.join(resolved, 'index.js').replace(/\\/g, '/'),
-        ];
-
-        for (const candidate of candidates) {
-            if (fs.existsSync(candidate)) {
-                return normalizePath(candidate);
-            }
-        }
-
-        return null;
+        return this.resolver.resolve(importSource, fromFile);
     }
 }

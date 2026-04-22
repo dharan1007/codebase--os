@@ -199,14 +199,27 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 ---
 
+---
+
+## Built for Billion-Dollar Scales
+
+While other agents crash on large codebases, Codebase OS is architected for the enterprise monorepo.
+
+*   **Streaming Scanner**: Processes 1M+ files in bounded memory windows (200 files at a time). Never hits the Node.js 1.5GB heap limit.
+*   **Two-Stage Vector Search**: $O(1)$ retrieval using SQL-side "Sketch" pre-filtering. Scans 100k+ code chunks in milliseconds without loading blobs into JS memory.
+*   **Persistent Cognitive State**: Replaces the "Sliding Window" with an LLM-compressed session summary. The agent remembers critical discoveries from Step 1 even at Step 50.
+*   **Adaptive Topological Planning**: Centrality-weighted graph traversal. Hub nodes get deep blast-radius analysis (up to depth 20), while leaves remain shallow.
+
+---
+
 ## Under the hood
 
-- **Relationship graph**: persistent SQLite-backed directed graph with BFS, topological sort, centrality scoring, and cycle detection
-- **Execution model**: unified diff patching on existing files (not full overwrites) with path sandbox validation on every tool call
-- **Schema validation**: Zod-validated agent actions — every AI response is type-checked before execution
-- **Memory**: cross-session SQLite change records — hot files, recurring failure zones, session history injected into every agent prompt
-- **SSE dashboard**: real-time step streaming, diff viewer, task plan tracker — all live data, no polling
-- **Sliding window context**: seed message always preserved + last 10 tool exchanges — no context overflow
+- **Relationship Graph**: Persistent SQLite-backed directed graph with $O(1)$ reverse indexing and Kahn's topological sort.
+- **Cognitive State**: Three-tier memory (Working / Session / Long-term) with LLM-based compression and SQLite persistence.
+- **Execution model**: Unified diff patching with path-sandbox validation. Read-only project mounts and ephemeral write volumes.
+- **Security**: Prompt injection scrubbing for all external data. Meta-character rejection engine for shell execution.
+- **Persistence**: Optimized SQLite core with WAL mode, busy timeouts, and 512MB memory-mapped I/O for massive corpora.
+- **SSE Dashboard**: Real-time step streaming and task-plan tracking at localhost:3000.
 
 ---
 

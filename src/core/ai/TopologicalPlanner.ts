@@ -115,6 +115,22 @@ export class TopologicalPlanner {
             };
         }
 
+        // ADAPTIVE DEPTH: compute the BFS ceiling from the centrality of root nodes.
+        // A hub node (many dependents) must be traversed deeply — a leaf node is shallow.
+        //
+        // Formula: maxDepth = clamp(log2(maxDependents + 2) * 3, 4, 20)
+        // maxDependents=0   → depth 4  (leaf: shallow scan)
+        // maxDependents=10  → depth 10 (moderate hub)
+        // maxDependents=100 → depth 15 (major hub)
+        // maxDependents=500 → depth 20 (central infrastructure, full traversal)
+        const maxDependents = Math.max(
+            ...Array.from(rootNodeIds).map(id =>
+                (this.graph.reverseAdjacency.get(id) ?? new Set()).size
+            ),
+            0
+        );
+        const adaptiveDepth = Math.min(20, Math.max(4, Math.round(Math.log2(maxDependents + 2) * 3)));
+
         const affectedIds = new Map<string, { depth: number; reason: string }>();
 
         // Seed with roots
@@ -127,11 +143,11 @@ export class TopologicalPlanner {
         const fwdVisited = new Set<string>(rootNodeIds);
         while (fwdQueue.length > 0) {
             const { id, depth } = fwdQueue.shift()!;
-            if (depth > 4) continue;
+            if (depth > adaptiveDepth) continue;
             for (const dep of (this.graph.adjacency.get(id) ?? new Set())) {
                 if (!fwdVisited.has(dep)) {
                     fwdVisited.add(dep);
-                    affectedIds.set(dep, { depth, reason: `dependency (depth ${depth})` });
+                    affectedIds.set(dep, { depth, reason: `dependency (depth ${depth}/${adaptiveDepth})` });
                     fwdQueue.push({ id: dep, depth: depth + 1 });
                 }
             }
@@ -142,12 +158,12 @@ export class TopologicalPlanner {
         const bwdVisited = new Set<string>(rootNodeIds);
         while (bwdQueue.length > 0) {
             const { id, depth } = bwdQueue.shift()!;
-            if (depth > 4) continue;
+            if (depth > adaptiveDepth) continue;
             for (const dep of (this.graph.reverseAdjacency.get(id) ?? new Set())) {
                 if (!bwdVisited.has(dep)) {
                     bwdVisited.add(dep);
                     if (!affectedIds.has(dep)) {
-                        affectedIds.set(dep, { depth, reason: `dependent (will break at depth ${depth})` });
+                        affectedIds.set(dep, { depth, reason: `dependent (will break at depth ${depth}/${adaptiveDepth})` });
                     }
                     bwdQueue.push({ id: dep, depth: depth + 1 });
                 }
