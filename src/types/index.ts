@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// ─── Node Types ──────────────────────────────────────────────────────────────
+// ─── Graph Types ──────────────────────────────────────────────────────────────
 
 export type NodeKind =
     | 'file'
@@ -9,16 +9,17 @@ export type NodeKind =
     | 'interface'
     | 'type'
     | 'variable'
-    | 'constant'
-    | 'enum'
     | 'api_endpoint'
     | 'db_table'
     | 'db_column'
-    | 'db_relation'
     | 'component'
     | 'hook'
-    | 'module'
-    | 'package';
+    | 'route'
+    | 'config'
+    | 'test'
+    | 'schema'
+    | 'query'
+    | 'mutation';
 
 export type EdgeKind =
     | 'imports'
@@ -29,15 +30,15 @@ export type EdgeKind =
     | 'uses_type'
     | 'reads_from'
     | 'writes_to'
-    | 'depends_on'
     | 'provides'
+    | 'tests'
+    | 'depends_on'
     | 'references'
     | 'api_uses'
     | 'db_uses'
-    | 'renders'
-    | 'tests';
+    | 'renders';
 
-export type Layer = 'database' | 'backend' | 'api' | 'frontend' | 'config' | 'infrastructure';
+export type Layer = 'database' | 'backend' | 'api' | 'frontend' | 'config' | 'infrastructure' | 'unknown';
 
 export type Language =
     | 'typescript'
@@ -62,17 +63,12 @@ export type Language =
     | 'yaml'
     | 'json'
     | 'dockerfile'
+    | 'mixed'
     | 'unknown';
 
-export interface Position {
-    line: number;
-    column: number;
-}
-
 export interface SourceLocation {
-    file: string;
-    start: Position;
-    end: Position;
+    start: { line: number; column: number };
+    end: { line: number; column: number };
 }
 
 export interface GraphNode {
@@ -102,77 +98,52 @@ export interface GraphEdge {
     createdAt: number;
 }
 
-export interface RelationshipGraph {
-    nodes: Map<string, GraphNode>;
-    edges: Map<string, GraphEdge>;
-    adjacency: Map<string, Set<string>>;
-    reverseAdjacency: Map<string, Set<string>>;
-}
+// ─── Impact Types ─────────────────────────────────────────────────────────────
 
-// ─── Change Types ─────────────────────────────────────────────────────────────
-
-export type ChangeType =
-    | 'added'
-    | 'modified'
-    | 'deleted'
-    | 'renamed'
-    | 'moved';
-
-export type ChangeSeverity = 'breaking' | 'major' | 'minor' | 'patch';
-
-export type ChangeScope =
-    | 'schema'
-    | 'api_contract'
-    | 'type_definition'
-    | 'business_logic'
-    | 'configuration'
-    | 'dependency'
-    | 'ui_component'
-    | 'test'
-    | 'documentation';
-
-export interface FileChange {
-    id: string;
+export interface TriggerChange {
     filePath: string;
-    changeType: ChangeType;
-    oldContent?: string;
-    newContent?: string;
-    timestamp: number;
-    diff?: string;
+    nodeId?: string;
+    changeType: 'create' | 'modify' | 'delete' | 'rename';
+    description?: string;
 }
 
 export interface ImpactedNode {
     node: GraphNode;
+    depth: number;
+    path: string[];
     reason: string;
-    severity: ChangeSeverity;
-    propagationDepth: number;
-    requiresUpdate: boolean;
-    suggestedAction?: string;
+    confidence: number;
+}
+
+export interface CrossLayerIssue {
+    sourceLayer: Layer;
+    targetLayer: Layer;
+    sourceNode: string;
+    targetNode: string;
+    edgeKind: EdgeKind;
+    severity: 'info' | 'warning' | 'error';
+    message: string;
 }
 
 export interface ImpactReport {
     id: string;
-    triggerChange: FileChange;
+    triggerChange: TriggerChange;
     impactedNodes: ImpactedNode[];
     affectedLayers: Layer[];
-    severity: ChangeSeverity;
-    scope: ChangeScope[];
+    severity: 'low' | 'medium' | 'high' | 'critical';
+    scope: {
+        files: string[];
+        functions: string[];
+        apiEndpoints: string[];
+        dbTables: string[];
+        components: string[];
+    };
     crossLayerIssues: CrossLayerIssue[];
     timestamp: number;
     summary: string;
 }
 
-export interface CrossLayerIssue {
-    description: string;
-    sourceLayer: Layer;
-    targetLayer: Layer;
-    severity: ChangeSeverity;
-    affectedNodeIds: string[];
-    resolution?: string;
-    autoFixable?: boolean;
-}
-
-// ─── Diagnostic & Failure Types ──────────────────────────────────────────────
+// ─── Diagnostics Types ────────────────────────────────────────────────────────
 
 export interface Diagnostic {
     file: string;
@@ -182,7 +153,6 @@ export interface Diagnostic {
     code?: string;
     severity: 'error' | 'warning';
     tool: string;
-    metadata?: Record<string, any>;
 }
 
 export interface DiagnosticReport {
@@ -192,12 +162,11 @@ export interface DiagnosticReport {
     durationMs: number;
 }
 
-export type FailureCategory = 'ai_timeout' | 'test_regression' | 'parse_error' | 'permission_denied' | 'model_outage' | 'runtime_crash' | 'interface_mismatch' | 'logic_drift';
-
 export interface FailureSnapshot {
     id: string;
-    category: FailureCategory;
+    category: 'compile_error' | 'runtime_crash' | 'test_regression' | 'parse_error' | 'logic_drift';
     filePath: string;
+    signature?: string;
     message: string;
     stackTrace?: string;
     contextBefore: string;
@@ -227,10 +196,9 @@ export interface StaticFixRule {
     id: string;
     tool: string;
     code?: string;
-    messagePattern: string; // regex string
+    messagePattern: string;
     description: string;
 }
-
 
 // ─── AI Orchestration Types ──────────────────────────────────────────────────
 
@@ -269,7 +237,6 @@ export interface AIProvider {
     listModels?(): Promise<string[]>;
     isAvailable(): Promise<boolean>;
 }
-
 
 export interface AICompletionRequest {
     systemPrompt: string;
@@ -365,7 +332,7 @@ export const ProjectConfigSchema = z.object({
     language: z.enum([
         'typescript', 'javascript', 'python', 'go', 'rust', 'java', 'csharp',
         'kotlin', 'swift', 'dart', 'ruby', 'php', 'c', 'cpp', 'html', 'css', 'scss',
-        'sql', 'graphql', 'yaml', 'json', 'dockerfile', 'mixed', 'unknown'
+        'sql', 'graphql', 'yaml', 'json', 'dockerfile', 'mixed', 'unknown',
     ]),
     layers: z.object({
         database: z.array(z.string()).default([]),
@@ -387,7 +354,7 @@ export const ProjectConfigSchema = z.object({
     }).default({
         autoResolvePortConflicts: true,
         autoResolveRuntimeVersions: true,
-        dockerSocket: '/var/run/docker.sock'
+        dockerSocket: '/var/run/docker.sock',
     }),
     watch: z.object({
         debounceMs: z.number().default(500),
@@ -396,13 +363,15 @@ export const ProjectConfigSchema = z.object({
     }).default({
         debounceMs: 500,
         autoAnalyze: true,
-        autoApply: false
+        autoApply: false,
     }),
 });
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 
 // ─── Change History ───────────────────────────────────────────────────────────
+
+export type ChangeOperation = 'modify' | 'create' | 'delete' | 'move';
 
 export interface ChangeRecord {
     id: string;
@@ -418,6 +387,9 @@ export interface ChangeRecord {
     provider: AIProviderKind;
     confidence: number;
     impactReportId?: string;
+    operation?: ChangeOperation;
+    /** Original path for move operations; `filePath` is the destination path. */
+    sourcePath?: string;
 }
 
 // ─── Scanner Types ────────────────────────────────────────────────────────────
@@ -428,10 +400,7 @@ export interface ParsedFunction {
     returnType?: string;
     isAsync: boolean;
     isExported: boolean;
-    docComment?: string;
     location: SourceLocation;
-    calls: string[];
-    usesTypes: string[];
 }
 
 export interface ParsedClass {
@@ -439,25 +408,13 @@ export interface ParsedClass {
     extends?: string;
     implements: string[];
     methods: ParsedFunction[];
-    properties: ParsedProperty[];
     isExported: boolean;
-    docComment?: string;
-    location: SourceLocation;
-}
-
-export interface ParsedProperty {
-    name: string;
-    type?: string;
-    optional: boolean;
-    readonly: boolean;
     location: SourceLocation;
 }
 
 export interface ParsedInterface {
     name: string;
     extends: string[];
-    properties: ParsedProperty[];
-    methods: ParsedFunction[];
     isExported: boolean;
     location: SourceLocation;
 }
@@ -465,82 +422,47 @@ export interface ParsedInterface {
 export interface ParsedImport {
     source: string;
     specifiers: string[];
-    isDefault: boolean;
-    isNamespace: boolean;
-    resolvedPath?: string;
+    isTypeOnly: boolean;
 }
 
 export interface ParsedExport {
     name: string;
-    kind: 'function' | 'class' | 'interface' | 'type' | 'variable' | 'default' | 're-export';
+    source?: string;
     isDefault: boolean;
 }
 
-export interface ParsedAPIEndpoint {
-    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD';
+export interface APIEndpoint {
+    method: string;
     path: string;
-    handler: string;
-    middleware: string[];
-    requestBody?: string;
-    responseType?: string;
+    handler?: string;
     location: SourceLocation;
-}
-
-export interface ParsedDBSchema {
-    tableName: string;
-    columns: ParsedDBColumn[];
-    relations: ParsedDBRelation[];
-    location: SourceLocation;
-}
-
-export interface ParsedDBColumn {
-    name: string;
-    type: string;
-    nullable: boolean;
-    primaryKey: boolean;
-    unique: boolean;
-    defaultValue?: string;
-    references?: { table: string; column: string };
-}
-
-export interface ParsedDBRelation {
-    kind: 'one-to-one' | 'one-to-many' | 'many-to-many';
-    targetTable: string;
-    foreignKey: string;
-    joinTable?: string;
 }
 
 export interface FileAnalysis {
     filePath: string;
     language: Language;
     layer: Layer;
-    hash: string;
     imports: ParsedImport[];
     exports: ParsedExport[];
     functions: ParsedFunction[];
     classes: ParsedClass[];
     interfaces: ParsedInterface[];
-    types: Array<{ name: string; definition: string; location: SourceLocation; isExported: boolean }>;
-    variables: Array<{ name: string; type?: string; isConst: boolean; isExported: boolean; location: SourceLocation }>;
-    apiEndpoints: ParsedAPIEndpoint[];
-    dbSchemas: ParsedDBSchema[];
-    analyzedAt: number;
+    apiEndpoints: APIEndpoint[];
+    dbTables: string[];
     errors: string[];
+    hash: string;
 }
 
-// ─── Sync Types ───────────────────────────────────────────────────────────────
+// ─── Synchronization Types ────────────────────────────────────────────────────
 
 export interface SyncIssue {
     id: string;
-    kind: 'type_mismatch' | 'missing_field' | 'broken_reference' | 'schema_drift' | 'api_drift';
-    description: string;
+    type: string;
+    severity: 'info' | 'warning' | 'error';
     sourceFile: string;
     targetFile?: string;
-    sourceNodeId: string;
-    targetNodeId?: string;
-    severity: ChangeSeverity;
+    message: string;
     autoFixable: boolean;
-    suggestedFix?: string;
 }
 
 export interface SyncReport {
@@ -548,6 +470,6 @@ export interface SyncReport {
     timestamp: number;
     issues: SyncIssue[];
     autoFixed: SyncIssue[];
-    requiresManualFix: SyncIssue[];
+    requiresManual: SyncIssue[];
     summary: string;
 }
