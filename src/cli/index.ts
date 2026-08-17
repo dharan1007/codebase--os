@@ -35,30 +35,31 @@ const program = new Command();
 
 program
     .name('cos')
-    .description(chalk.bold('Codebase OS') + ' — Autonomous coding intelligence with persistent graph memory')
+    .description(chalk.bold('Codebase OS') + ' — transactional AI-assisted software-change runtime')
     .version('1.0.0', '-v, --version')
     .addHelpText('after', `
-${chalk.bold('Core Commands:')}
-  ${chalk.cyan('cos chat')}                          Interactive coding session (like Claude Code)
-  ${chalk.cyan('cos agent "<task>"')}                Autonomous one-shot agent
-  ${chalk.cyan('cos ask "<request>"')}               AI: plan and apply changes
-  ${chalk.cyan('cos fix [file]')}                    AI: detect and fix errors
-  ${chalk.cyan('cos continue')}                      Resume the last interrupted task
+${chalk.bold('Verified engineering:')}
+  ${chalk.cyan('cos chat')}                          Interactive session using the hardened AgentLoop
+  ${chalk.cyan('cos agent "<task>"')}                Autonomous task with independent completion verification
+  ${chalk.cyan('cos fix [file]')}                    Diagnose and repair supported project errors
+  ${chalk.cyan('cos continue')}                      Resume the latest durable incomplete checkpoint
 
-${chalk.bold('Graph Intelligence (unique to Codebase OS):')}
-  ${chalk.cyan('cos scan')}                          Build/update the persistent relationship graph
-  ${chalk.cyan('cos plan "<task>"')}                 Blast radius + topological execution order
-  ${chalk.cyan('cos propagate')}                     Watch files — auto-propagate changes downstream
-  ${chalk.cyan('cos analyze <file>')}                Impact analysis for a specific file
-  ${chalk.cyan('cos visualize')}                     Interactive HTML graph visualization
+${chalk.bold('Repository intelligence:')}
+  ${chalk.cyan('cos scan')}                          Incrementally refresh the persistent relationship graph
+  ${chalk.cyan('cos scan --force')}                  Force full analysis instead of hash-based skipping
+  ${chalk.cyan('cos plan "<task>"')}                 Typed blast radius and dependency-first file ordering
+  ${chalk.cyan('cos analyze <file>')}                Inspect impact for a specific file
+  ${chalk.cyan('cos propagate')}                     Watch changes and propose verified downstream compatibility patches
+  ${chalk.cyan('cos visualize')}                     Visualize the persistent graph
 
 ${chalk.bold('Operations:')}
-  ${chalk.cyan('cos sync')}                          Detect cross-layer sync issues
-  ${chalk.cyan('cos rollback <id>')}                 Revert an AI-applied change
-  ${chalk.cyan('cos history')}                       View changes across all sessions
-  ${chalk.cyan('cos serve')}                         Start the live dashboard
-  ${chalk.cyan('cos init')}                          Initialize in current project
+  ${chalk.cyan('cos sync')}                          Inspect cross-layer synchronization issues
+  ${chalk.cyan('cos rollback <id>')}                 Conflict-safe rollback of a recorded transaction
+  ${chalk.cyan('cos history')}                       Inspect durable Codebase OS change history
+  ${chalk.cyan('cos serve')}                         Start the loopback-only local dashboard
+  ${chalk.cyan('cos init')}                          Initialize Codebase OS state in the current project
 
+${chalk.gray('Completion is evidence-gated: a model can request finish, but the runtime decides whether verification passed.')}
 `);
 
 program.addCommand(initCommand());
@@ -86,30 +87,28 @@ program.addCommand(planCommand());
 program.addCommand(chatCommand());
 program.addCommand(propagateCommand());
 
-// Handle Ctrl+C gracefully
 process.on('SIGINT', () => {
-    console.log(chalk.yellow('\n\n👋 Operation cancelled by user. Cleaning up...'));
-    process.exit(0);
+    console.log(chalk.yellow('\nOperation cancelled.'));
 });
 
-// Global error handlers for production stability
-process.on('unhandledRejection', (reason) => {
-    console.error(chalk.red('\n🔥 Unhandled Process Rejection:'), reason);
-    process.exit(1);
+process.on('unhandledRejection', reason => {
+    console.error(chalk.red('\nUnhandled promise rejection:'), reason);
+    process.exitCode = 1;
 });
 
-process.on('uncaughtException', (err) => {
-    console.error(chalk.red('\n🔥 Uncaught Exception:'), err.message);
+process.on('uncaughtException', err => {
+    console.error(chalk.red('\nUncaught exception:'), err.message);
     if (process.env['COS_LOG_LEVEL'] === 'debug') console.error(err.stack);
-    process.exit(1);
+    process.exitCode = 1;
 });
 
 program.parseAsync(process.argv).catch((err: any) => {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes('command failed')) {
-        console.error(chalk.red('\nFatal error:'), msg);
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('command failed')) {
+        console.error(chalk.red('\nFatal error:'), message);
         if (process.env['COS_LOG_LEVEL'] === 'debug' && err.stack) {
             console.error(chalk.gray(err.stack));
         }
     }
+    process.exitCode = 1;
 });
