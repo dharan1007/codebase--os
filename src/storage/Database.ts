@@ -4,21 +4,35 @@ import fs from 'fs';
 import { logger } from '../utils/logger.js';
 
 const activeInstances = new Set<Database>();
+let shutdownStarted = false;
 
 const cleanup = (): void => {
     if (activeInstances.size === 0) return;
     logger.info('Shutting down Codebase OS databases.');
-    for (const db of activeInstances) {
+    for (const db of [...activeInstances]) {
         try { db.close(); } catch { /* best effort */ }
     }
     activeInstances.clear();
 };
 
-process.on('SIGINT', () => { cleanup(); process.exit(0); });
-process.on('SIGTERM', () => { cleanup(); process.exit(0); });
+const handleSignal = (signal: 'SIGINT' | 'SIGTERM'): void => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    const exitCode = signal === 'SIGINT' ? 130 : 143;
+    cleanup();
+    process.exitCode = exitCode;
+    // Installing a signal handler suppresses Node's default termination. Give
+    // other cleanup listeners a short window, then guarantee the conventional
+    // signal exit code even if a watcher/server handle is still open.
+    setTimeout(() => process.exit(exitCode), 500).unref();
+};
+
+process.once('SIGINT', () => handleSignal('SIGINT'));
+process.once('SIGTERM', () => handleSignal('SIGTERM'));
 
 export class Database {
     private db: SQLiteDatabase;
+    private closed = false;
 
     constructor(dataDir: string) {
         fs.mkdirSync(dataDir, { recursive: true });
@@ -211,23 +225,29 @@ export class Database {
     }
 
     prepare(sql: string): any {
+        if (this.closed) throw new Error('Database is closed.');
         return this.db.prepare(sql);
     }
 
     exec(sql: string): void {
+        if (this.closed) throw new Error('Database is closed.');
         this.db.exec(sql);
     }
 
     transaction<T>(fn: () => T): T {
+        if (this.closed) throw new Error('Database is closed.');
         return this.db.transaction(fn)();
     }
 
     close(): void {
+        if (this.closed) return;
+        this.closed = true;
         activeInstances.delete(this);
         this.db.close();
     }
 
     get raw(): SQLiteDatabase {
+        if (this.closed) throw new Error('Database is closed.');
         return this.db;
     }
 }
