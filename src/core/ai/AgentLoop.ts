@@ -1,4 +1,4 @@
-import type { AIProvider } from '../../types/index.js';
+import type { AIProvider, ChangeOperation } from '../../types/index.js';
 import { logger } from '../../utils/logger.js';
 import {
     readFileTool,
@@ -30,6 +30,7 @@ import { computeDiff } from '../../utils/diff.js';
 import { TopologicalPlanner } from './TopologicalPlanner.js';
 import { SessionMemory } from '../context/SessionMemory.js';
 import { CognitiveState } from '../context/CognitiveState.js';
+import { VerificationEngine } from '../verification/VerificationEngine.js';
 import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
@@ -85,6 +86,7 @@ export class AgentLoop {
     private checkpointManager: CheckpointManager;
     private decisionEngine: DecisionEngine;
     private sandboxManager: SandboxManager;
+    private verificationEngine: VerificationEngine;
     private evalTracker: EvalTracker;
     private localServer: LocalServer;
     private fileModifications = new Map<string, number>();
@@ -112,7 +114,7 @@ export class AgentLoop {
         private sessionId: string,
         private graph: RelationshipGraph,
         private store: GraphStore,
-        failureIntelligence?: { manager: FailureManager; rca: RootCauseAnalyzer }
+        failureIntelligence?: { manager: FailureManager; rca: RootCauseAnalyzer },
     ) {
         const failureStore = new FailureStore(db);
         const resourceMonitor = new ResourceMonitor(db);
@@ -121,6 +123,7 @@ export class AgentLoop {
         this.localServer.start();
         this.decisionEngine = new DecisionEngine(graph);
         this.sandboxManager = new SandboxManager(rootDir);
+        this.verificationEngine = new VerificationEngine(rootDir, graph, this.sandboxManager);
         this.evalTracker = new EvalTracker(db);
         this.cognitiveState = new CognitiveState(sessionId, db, provider);
         this.cognitiveState.restore();
@@ -149,7 +152,7 @@ export class AgentLoop {
             initialSteps?: AgentStep[];
             initialFiles?: string[];
             initialMessages?: AgentMessage[];
-        } = {}
+        } = {},
     ): Promise<AgentResult> {
         this.currentTask = task;
         if (options.maxSteps) this.maxSteps = options.maxSteps;
@@ -157,7 +160,6 @@ export class AgentLoop {
         this.startTime = Date.now();
 
         WatchdogService.getInstance().register(this.sessionId);
-
         this.steps = options.initialSteps ?? [];
         this.filesWritten = options.initialFiles ?? [];
         const messages: AgentMessage[] = options.initialMessages ? [...options.initialMessages] : [];
@@ -168,15 +170,18 @@ export class AgentLoop {
             const isDesignTask = /ui|style|css|aesthetic|design|layout|frontend/i.test(task);
             const designGuidance = isDesignTask ? `\n\n[DESIGN GUIDELINES]:\n${PromptTemplates.designPrinciples()}` : '';
 
-            const seedPrompt =
-                `TASK: ${task}\n\n` +
-                `[CODEBASE CONTEXT — read these files before making any changes]:\n${bootstrapContext}\n\n` +
-                designGuidance +
-                `RULE: For any EXISTING file, emit patch_file with a unified diff. ` +
-                `For NEW files, emit write_file with full content. ` +
-                `After the final mutation, run an appropriate successful build/test/typecheck/lint command before requesting finish. ` +
-                `Begin with read_file or list_files to confirm your understanding.`;
-            messages.push({ role: 'user', content: seedPrompt });
+            messages.push({
+                role: 'user',
+                content:
+                    `TASK: ${task}\n\n` +
+                    `[CODEBASE CONTEXT — read these files before making any changes]:\n${bootstrapContext}\n\n` +
+                    designGuidance +
+                    `RULE: For any EXISTING file, emit patch_file with a unified diff. ` +
+                    `For NEW files, emit write_file with full content. ` +
+                    `Use run_shell to investigate locally when useful, but do not claim success based on your own test choice: ` +
+                    `Codebase OS runs independent verification when you request finish. ` +
+                    `Begin with read_file or list_files to confirm your understanding.`,
+            });
         }
 
         let stepCount = this.steps.length;
@@ -206,9 +211,6 @@ export class AgentLoop {
                 summary => logger.debug('CognitiveState compressed', { summaryLen: summary.length }),
             );
 
-            // Do not append the generated cognitive header to durable conversation
-            // history every step; inject it only into this request to avoid summary
-            // headers recursively bloating future context.
             const regulatedMessages = this.contextManager.regulate([
                 ...messages,
                 { role: 'user', content: cognitiveHeader },
@@ -224,7 +226,7 @@ export class AgentLoop {
                     const providerResult = await this.provider.execute({
                         taskType: 'reasoning',
                         priority: 'high',
-                        context: regulatedMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n'),
+                        context: regulatedMessages.map(message => `${message.role.toUpperCase()}: ${message.content}`).join('\n\n'),
                         systemPrompt,
                         maxTokens: 4000,
                     });
@@ -299,23 +301,34 @@ export class AgentLoop {
 
             if (action.tool === 'finish') {
                 lastSummary = action.args['summary'] ?? 'Task completed.';
-                if (this.filesWritten.length > 0 && this.lastVerificationStep < this.lastMutationStep) {
-                    messages.push({
-                        role: 'user',
-                        content:
-                            '[VERIFICATION REQUIRED]: Code changed after the most recent successful verification. ' +
-                            'Run an appropriate build, test, typecheck, lint, or language-specific verification command. ' +
-                            'The runtime will not mark this task successful until that evidence exists.',
-                    });
-                    this.saveCheckpoint(messages);
-                    continue;
+                if (this.lastMutationStep > 0) {
+                    const verification = await this.verificationEngine.verify(this.filesWritten);
+                    this.verificationCommands = verification.commands;
+                    if (!verification.success) {
+                        const failedChecks = verification.checks
+                            .filter(check => !check.success)
+                            .slice(0, 6)
+                            .map(check =>
+                                `- ${check.name}: ${(check.error || check.output || 'failed').slice(0, 700)}`,
+                            )
+                            .join('\n');
+                        messages.push({
+                            role: 'user',
+                            content:
+                                `[INDEPENDENT VERIFICATION FAILED]\n${verification.summary}\n${failedChecks}\n\n` +
+                                `The task is NOT complete. Diagnose the evidence, repair the implementation, and request finish again.`,
+                        });
+                        this.saveCheckpoint(messages);
+                        continue;
+                    }
+                    this.lastVerificationStep = stepCount;
                 }
                 completed = true;
                 break;
             }
 
             let allowed = true;
-            if (['write_file', 'patch_file', 'delete_file', 'run_shell'].includes(action.tool)) {
+            if (['write_file', 'patch_file', 'delete_file', 'move_file', 'run_shell'].includes(action.tool)) {
                 const targetPath = action.args['path'] || action.args['oldPath'] || action.args['command'] || '';
 
                 if (action.tool === 'write_file' || action.tool === 'patch_file') {
@@ -337,7 +350,10 @@ export class AgentLoop {
                 let newContent: string | undefined;
                 if (action.tool === 'patch_file') {
                     diffLines = (action.args['diff'] ?? '').split('\n')
-                        .filter(line => (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---')))
+                        .filter(line =>
+                            (line.startsWith('+') && !line.startsWith('+++')) ||
+                            (line.startsWith('-') && !line.startsWith('---')),
+                        )
                         .length;
                 } else if (action.tool === 'write_file') {
                     newContent = action.args['content'] ?? '';
@@ -375,14 +391,12 @@ export class AgentLoop {
                     `Tool:${action.tool}`,
                 );
 
-                if (result.success && action.tool === 'patch_file') {
-                    diffOutput = action.args['diff'];
-                }
+                if (result.success && action.tool === 'patch_file') diffOutput = action.args['diff'];
 
                 if (!result.success) {
                     const report = await this.failureManager.handleFailure(
                         'runtime_crash',
-                        action.args['path'] || 'unknown',
+                        action.args['path'] || action.args['oldPath'] || 'unknown',
                         result.error || 'Unknown tool failure',
                     );
                     if (report.isRecurring) {
@@ -408,7 +422,7 @@ export class AgentLoop {
             } catch (err: any) {
                 await this.failureManager.handleFailure(
                     'runtime_crash',
-                    action.args['path'] || 'unknown',
+                    action.args['path'] || action.args['oldPath'] || 'unknown',
                     String(err?.message ?? err),
                 );
                 result = { success: false, output: '', error: String(err?.message ?? err) };
@@ -421,8 +435,10 @@ export class AgentLoop {
                 this.filesReadThisSession.add(action.args['path']);
                 this.cognitiveState.recordFileRead(action.args['path']);
             }
-            if ((action.tool === 'write_file' || action.tool === 'patch_file') && result.success && action.args['path']) {
-                this.cognitiveState.recordFileModified(action.args['path']);
+            if (result.success) {
+                for (const mutatedPath of this.pathsMutatedByAction(action)) {
+                    this.cognitiveState.recordFileModified(mutatedPath);
+                }
             }
             this.cognitiveState.persist();
 
@@ -442,12 +458,11 @@ export class AgentLoop {
 
             const toolMsg =
                 `[TOOL RESULT — Step ${stepCount}]\n` +
-                `Tool: ${action.tool} | Target: ${action.args['path'] || action.args['command'] || action.args['dir'] || '(none)'}\n` +
+                `Tool: ${action.tool} | Target: ${action.args['path'] || action.args['oldPath'] || action.args['command'] || action.args['dir'] || '(none)'}\n` +
                 `Status: ${result.success ? 'SUCCESS' : 'FAILED'}\n` +
                 `Output: ${(result.output || result.error || 'empty').slice(0, 800)}\n\n` +
                 `Files read so far: [${agentState.filesRead.slice(-5).join(', ')}]\n` +
-                `Files modified so far: [${agentState.filesModified.join(', ')}]\n` +
-                `Verification status: ${agentState.testsStatus}.\n` +
+                `Files affected so far: [${agentState.filesModified.join(', ')}]\n` +
                 'Determine the next action.';
 
             messages.push({ role: 'user', content: toolMsg });
@@ -593,10 +608,9 @@ export class AgentLoop {
         WatchdogService.getInstance().unregister(this.sessionId);
         this.localServer.stop();
 
-        const verified = this.filesWritten.length === 0 ||
+        const verified = this.lastMutationStep === 0 ||
             (this.lastVerificationStep >= this.lastMutationStep && this.lastVerificationStep > 0);
         const success = completed && verified && !outageDetected && !quotaReached;
-
         const result: AgentResult = {
             success,
             verified,
@@ -610,13 +624,10 @@ export class AgentLoop {
             quotaReached,
         };
 
-        if (success) {
-            this.checkpointManager.markFinished(this.sessionId);
-        } else {
-            this.saveCheckpoint(messages, 'paused');
-        }
+        if (success) this.checkpointManager.markFinished(this.sessionId);
+        else this.saveCheckpoint(messages, 'paused');
 
-        const tokensUsed = messages.reduce((acc, message) => acc + message.content.length / 4, 0);
+        const tokensUsed = messages.reduce((sum, message) => sum + message.content.length / 4, 0);
         this.evalTracker.trackSession(
             this.sessionId,
             'code',
@@ -631,17 +642,10 @@ export class AgentLoop {
 
     private updateExecutionEvidence(step: number, action: AgentAction, result: ToolResult): void {
         if (!result.success) return;
-
         if (['write_file', 'patch_file', 'delete_file', 'move_file'].includes(action.tool)) {
             this.lastMutationStep = step;
-        }
-
-        if (action.tool === 'run_shell') {
-            const command = action.args['command'] ?? '';
-            if (this.isVerificationCommand(command)) {
-                this.lastVerificationStep = step;
-                this.verificationCommands.push(command);
-            }
+            this.lastVerificationStep = 0;
+            this.verificationCommands = [];
         }
     }
 
@@ -660,20 +664,19 @@ export class AgentLoop {
         }
     }
 
-    private isVerificationCommand(command: string): boolean {
-        const normalized = command.trim().toLowerCase();
-        const patterns = [
-            /^npm\s+(test|run\s+(test|build|typecheck|lint|check|verify))(\s|$)/,
-            /^(pnpm|yarn|bun)\s+(test|build|typecheck|lint|check|verify)(\s|$)/,
-            /^npx\s+(tsc|eslint|jest|vitest)(\s|$)/,
-            /^(pytest|python\s+-m\s+pytest)(\s|$)/,
-            /^go\s+test(\s|$)/,
-            /^cargo\s+(test|check|clippy)(\s|$)/,
-            /^(mvn|gradle)\s+.*\b(test|check|verify|build)\b/,
-            /^dotnet\s+(test|build)(\s|$)/,
-            /^(swift|flutter|dart)\s+test(\s|$)/,
-        ];
-        return patterns.some(pattern => pattern.test(normalized));
+    private pathsMutatedByAction(action: AgentAction): string[] {
+        if (action.tool === 'write_file' || action.tool === 'patch_file' || action.tool === 'delete_file') {
+            return action.args['path'] ? [action.args['path']] : [];
+        }
+        if (action.tool === 'move_file') {
+            return [action.args['oldPath'], action.args['newPath']].filter((value): value is string => Boolean(value));
+        }
+        return [];
+    }
+
+    private trackAffected(relativePath: string): void {
+        if (!relativePath) return;
+        if (!this.filesWritten.includes(relativePath)) this.filesWritten.push(relativePath);
     }
 
     private async executeTool(
@@ -692,9 +695,9 @@ export class AgentLoop {
                     const absolute = path.resolve(this.rootDir, target);
                     const result = await writeFileTool(target, action.args['content'] ?? '', this.rootDir);
                     if (result.success) {
-                        if (!this.filesWritten.includes(target)) this.filesWritten.push(target);
+                        this.trackAffected(target);
                         const updated = fs.readFileSync(absolute, 'utf8');
-                        this.recordChange(stepCount, target, '', updated);
+                        this.recordChange(stepCount, target, '', updated, 'create');
                     }
                     return result;
                 }
@@ -703,26 +706,49 @@ export class AgentLoop {
                     const target = action.args['path'] ?? '';
                     const absolute = path.resolve(this.rootDir, target);
                     let original = '';
-                    try { original = fs.readFileSync(absolute, 'utf8'); } catch { /* tool will return a precise error */ }
-
+                    try { original = fs.readFileSync(absolute, 'utf8'); } catch { /* tool returns precise error */ }
                     const result = await patchFileTool(target, action.args['diff'] ?? '', this.rootDir);
                     if (result.success) {
-                        if (!this.filesWritten.includes(target)) this.filesWritten.push(target);
+                        this.trackAffected(target);
                         const updated = fs.readFileSync(absolute, 'utf8');
-                        this.recordChange(stepCount, target, original, updated);
+                        this.recordChange(stepCount, target, original, updated, 'modify');
                     }
                     return result;
                 }
 
-                case 'delete_file':
-                    return await deleteFileTool(action.args['path'] ?? '', this.rootDir);
+                case 'delete_file': {
+                    const target = action.args['path'] ?? '';
+                    const absolute = path.resolve(this.rootDir, target);
+                    if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) {
+                        return { success: false, output: '', error: 'Transactional autonomous delete supports files only.' };
+                    }
+                    const original = fs.readFileSync(absolute, 'utf8');
+                    const result = await deleteFileTool(target, this.rootDir);
+                    if (result.success) {
+                        this.trackAffected(target);
+                        this.recordChange(stepCount, target, original, '', 'delete');
+                    }
+                    return result;
+                }
 
-                case 'move_file':
-                    return await moveFileTool(
-                        action.args['oldPath'] ?? '',
-                        action.args['newPath'] ?? '',
-                        this.rootDir,
-                    );
+                case 'move_file': {
+                    const oldPath = action.args['oldPath'] ?? '';
+                    const newPath = action.args['newPath'] ?? '';
+                    const absoluteOld = path.resolve(this.rootDir, oldPath);
+                    const absoluteNew = path.resolve(this.rootDir, newPath);
+                    if (!fs.existsSync(absoluteOld) || !fs.statSync(absoluteOld).isFile()) {
+                        return { success: false, output: '', error: 'Transactional autonomous move supports files only.' };
+                    }
+                    const original = fs.readFileSync(absoluteOld, 'utf8');
+                    const result = await moveFileTool(oldPath, newPath, this.rootDir);
+                    if (result.success) {
+                        const updated = fs.readFileSync(absoluteNew, 'utf8');
+                        this.trackAffected(oldPath);
+                        this.trackAffected(newPath);
+                        this.recordChange(stepCount, newPath, original, updated, 'move', absoluteOld);
+                    }
+                    return result;
+                }
 
                 case 'list_files':
                     return await listFilesTool(action.args['dir'] ?? '.', this.rootDir);
@@ -753,8 +779,15 @@ export class AgentLoop {
         }
     }
 
-    private recordChange(stepCount: number, relativePath: string, original: string, updated: string): void {
-        if (original === updated) return;
+    private recordChange(
+        stepCount: number,
+        relativePath: string,
+        original: string,
+        updated: string,
+        operation: ChangeOperation,
+        sourcePath?: string,
+    ): void {
+        if (operation === 'modify' && original === updated) return;
         const absolutePath = path.resolve(this.rootDir, relativePath);
         const diff = computeDiff(original, updated, relativePath).raw;
 
@@ -768,11 +801,9 @@ export class AgentLoop {
             diff,
             appliedAt: Date.now(),
             provider: this.provider.kind,
-            // This field historically represented model confidence. For direct
-            // file-tool transactions, 1 means only that the write was confirmed,
-            // not that the code is semantically correct; semantic completion is
-            // separately gated by verification evidence.
             confidence: 1,
+            operation,
+            sourcePath,
         });
     }
 }
