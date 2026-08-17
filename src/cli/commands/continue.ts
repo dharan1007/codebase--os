@@ -13,12 +13,12 @@ import { ChangeHistory } from '../../storage/ChangeHistory.js';
 
 export function continueCommand(): Command {
     return new Command('continue')
-        .description('Resume the last interrupted AI task from its last checkpoint')
+        .description('Resume the last interrupted AI task from its durable checkpoint')
         .action(async () => {
             const ctx = await loadContext();
             if (!ctx) return;
 
-            const { config, db, sessionId, graph, store } = ctx;
+            const { config, db, graph, store } = ctx;
             const checkpointManager = new CheckpointManager(db);
             const checkpoint = checkpointManager.getLatest();
 
@@ -31,42 +31,57 @@ export function continueCommand(): Command {
             console.log(chalk.gray('─'.repeat(40)));
             console.log(`  Task Type: ${chalk.cyan(checkpoint.taskType.toUpperCase())}`);
             console.log(`  Session:   ${chalk.gray(checkpoint.sessionId)}`);
+            console.log(`  Status:    ${chalk.gray(checkpoint.status)}`);
             console.log(`  Updated:   ${new Date(checkpoint.updatedAt).toLocaleString()}`);
             console.log('');
 
             const monitor = new ResourceMonitor(db);
             const modelRouter = new ModelRouter(config, db, monitor);
-            const provider = modelRouter.getProviderForTask('code');
+            const provider = modelRouter.getProviderForTask('reasoning');
 
             if (checkpoint.taskType === 'agent') {
                 const agent = new AgentLoop(provider, config.rootDir, db, checkpoint.sessionId, graph, store);
-                const task = checkpoint.plan[0]?.description ?? 'Unknown task';
-                const steps = checkpoint.metadata.steps ?? [];
-                const files = checkpoint.metadata.filesWritten ?? [];
-                
+                const task = checkpoint.metadata.task || checkpoint.plan[0]?.description;
+                if (!task || typeof task !== 'string' || task.trim().length === 0) {
+                    console.log(chalk.red('Checkpoint is missing the original task description; refusing an unsafe blind resume.'));
+                    return;
+                }
+
+                const steps = Array.isArray(checkpoint.metadata.steps) ? checkpoint.metadata.steps : [];
+                const files = Array.isArray(checkpoint.metadata.filesWritten) ? checkpoint.metadata.filesWritten : [];
+                const messages = Array.isArray(checkpoint.metadata.messages) ? checkpoint.metadata.messages : [];
+
                 console.log(chalk.yellow(`Resuming autonomous agent from step ${steps.length + 1}...`));
-                
+
                 const spinner = ora('Agent is working...').start();
                 const result = await agent.run(task, {
-                    onStep: async (step: number, action: any, toolResult: any) => {
-                        spinner.start(`Agent working... (step ${step}: ${action.tool})`);
+                    onStep: async (step: number, action: any) => {
+                        spinner.text = `Agent working... (step ${step}: ${action.tool})`;
                     },
                     initialSteps: steps,
-                    initialFiles: files
+                    initialFiles: files,
+                    initialMessages: messages,
                 });
-                
+
                 spinner.stop();
                 console.log(chalk.bold('\nAgent Summary'));
                 console.log(chalk.gray('─'.repeat(40)));
-                console.log(`  ${result.success ? chalk.green('Completed') : chalk.yellow('Partial')} — ${result.totalSteps} step(s) taken`);
+                console.log(`  ${result.success ? chalk.green('Verified completion') : chalk.yellow('Still incomplete')} — ${result.totalSteps} step(s)`);
+                console.log(`  Verified: ${result.verified ? chalk.green('yes') : chalk.yellow('no')}`);
                 console.log(`  ${result.summary}`);
-                checkpointManager.markFinished(checkpoint.id);
+                if (result.verificationCommands.length > 0) {
+                    console.log(chalk.gray(`  Evidence: ${result.verificationCommands.join(' | ')}`));
+                }
+                // AgentLoop owns checkpoint status. Do not mark a partial resume
+                // finished merely because this command returned.
             } else {
                 const history = new ChangeHistory(db);
                 const executor = new SelfHealingExecutor(provider, config, history, checkpoint.sessionId, db);
-                
-                console.log(chalk.yellow(`Resuming plan execution: ${checkpoint.results.length} / ${checkpoint.plan.length} tasks completed.`));
-                
+
+                console.log(chalk.yellow(
+                    `Resuming plan execution: ${checkpoint.results.length} / ${checkpoint.plan.length} tasks completed.`,
+                ));
+
                 const spinners = new Map<string, any>();
                 const healResult = await executor.executeAndHeal(
                     checkpoint.plan,
@@ -81,11 +96,17 @@ export function continueCommand(): Command {
                             spinners.get(label)?.fail(`Failed: ${detail ?? 'error'}`);
                         }
                     },
-                    checkpoint.results
+                    checkpoint.results,
                 );
 
                 console.log(RichFormatter.formatExecutionTable(healResult.finalResults));
-                checkpointManager.markFinished(checkpoint.id);
+                const complete = healResult.finalResults.length >= checkpoint.plan.length &&
+                    healResult.finalResults.every(result => result.success);
+                if (complete) {
+                    checkpointManager.markFinished(checkpoint.id);
+                } else {
+                    console.log(chalk.yellow('Plan remains checkpointed because one or more tasks are not verified successful.'));
+                }
             }
 
             console.log('');
