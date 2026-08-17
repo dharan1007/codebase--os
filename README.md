@@ -1,252 +1,267 @@
 # Codebase OS
 
+[![CI](https://github.com/dharan1007/codebase--os/actions/workflows/ci.yml/badge.svg)](https://github.com/dharan1007/codebase--os/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Node](https://img.shields.io/badge/Node-18+-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
-[![License](https://img.shields.io/badge/License-MIT-00d4ff?style=flat-square)](LICENSE)
-[![Build](https://img.shields.io/badge/Build-Passing-10b981?style=flat-square)](#)
+[![Node](https://img.shields.io/badge/Node-20%2B-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![License](https://img.shields.io/badge/License-Proprietary-6b7280?style=flat-square)](LICENSE)
 
----
+**Codebase OS is a local software-change runtime for AI-assisted engineering.** It combines repository scanning, a persistent typed relationship graph, dependency-first planning, transactional file mutation, durable engineering memory, isolated command execution, independent verification, and conflict-safe rollback.
 
-> **Every AI coding agent you've used starts completely blind.**
-> It reads files as it goes. It makes changes in arbitrary, random order.
-> It has zero memory of what happened last session.
-> It has no concept of architectural boundaries.
-> It leaves you to discover the breakage.
->
-> **Codebase OS is built on an entirely different premise.**
+The core design rule is simple:
 
----
+> A model may propose and implement a change. The runtime—not the model—decides whether observable evidence is sufficient to call the task complete.
 
-## The core difference
+## Production contract
 
-Other agents read-then-write. Codebase OS **knows before it moves.**
+Codebase OS intentionally distinguishes three states that AI tools often collapse together:
 
-Before executing a single change, Codebase OS computes the full **blast radius** of a task using a persistent, SQLite-backed relationship graph of your codebase. It then topologically sorts the affected files using Kahn's algorithm — so foundational modules are always updated before the files that depend on them.
+1. **Generated** — a model produced code or a patch.
+2. **Applied** — the runtime safely mutated the working tree and recorded the transaction.
+3. **Verified** — independently discovered project gates passed after the latest mutation.
 
-The result: no partial states. No cascading breakage. No "let me try fixing that too."
+`cos agent` and `cos chat` do not report verified completion after code changes unless the verification kernel succeeds. Reaching a step limit, a provider quota, a failed build/test, an unavailable sandbox, or an unknown verification strategy leaves the task incomplete instead of manufacturing success.
 
-This is not a prompt engineering trick. It is structural.
+## Architecture
 
----
-
-## What it does that nothing else does
-
-#### `cos plan "refactor auth to use JWT"` — before writing a single line
-
-```
-Codebase OS — Topological Change Plan
-────────────────────────────────────────────────────────────
-  Task:    refactor auth to use JWT
-  Graph:   1,284 nodes, 4,891 edges
-
-Blast Radius Analysis
-  14 files across database, backend, api layers
-  Complexity: HIGH
-
-Topological Execution Plan
-  (leaf dependencies first — root executors last)
-
-  [ 1]  src/utils/crypto.ts            [backend]   hub(9 dependents)
-  [ 2]  src/storage/SessionStore.ts    [database]
-  [ 3]  src/core/auth/TokenManager.ts  [backend]   (ROOT)
-  [ 4]  src/core/auth/Middleware.ts    [backend]   (ROOT)
-  [ 5]  src/api/routes/auth.ts         [api]
-  [ 6]  src/api/routes/users.ts        [api]
-  ...
-
-  Architecture Warnings
-  [!] UserController (api) -> SessionStore (database)  cross-layer direct access
-
-  No circular dependencies detected.
-
-  To execute: cos agent "refactor auth to use JWT"
+```text
+Repository
+   │
+   ├── scanner / AST analyzers
+   │       ↓
+   ├── persistent SQLite graph + file analysis
+   │       ↓
+   ├── typed dependency / impact planning
+   │       ↓
+   ├── model provider + context retrieval
+   │       ↓
+   ├── transactional file tools
+   │       ↓
+   ├── isolated command sandbox
+   │       ↓
+   ├── independent verification kernel
+   │       ↓
+   └── durable history / checkpoint / rollback
 ```
 
-No other coding agent exposes this. Claude Code doesn't have a graph. Codex reads files sequentially. Cursor uses a vector index with no topological ordering. This information — in this form — exists nowhere else.
+### Repository intelligence
 
----
+`cos scan` streams repository discovery in bounded file windows and persists per-file hashes. Incremental scans skip unchanged analysis, prune deleted files, rebuild symbol nodes for changed files, refresh import/call relationships, and optionally create code-body embeddings.
 
-#### `cos chat` — a live coding session with full memory
+The relationship graph currently models source-level entities and typed relationships such as imports, calls, inheritance, implementation, type use, database use, API use, references, rendering, containment and tests. Planning uses only relationships that represent dependency semantics; containment and test-evidence edges are deliberately excluded from topological scheduling.
 
-Not a one-shot command. A persistent, multi-turn terminal REPL that retains full conversation context across every exchange. Shows colored inline diffs on every file write. Runs `/plan <task>` mid-session. Remembers everything, including what you changed in previous sessions on this project.
+### Dependency-first planning
 
-```
-cos chat
+Graph convention is `consumer -> dependency`. Before Kahn topological sorting, Codebase OS converts the affected file graph to the scheduling direction `dependency -> consumer`. This makes dependencies precede consumers in acyclic affected subgraphs. Cycles are surfaced explicitly because a cyclic dependency graph has no valid total topological order.
 
-  Codebase OS — Interactive Chat
-  ────────────────────────────────────────────────────────
-  Project : aphelion
-  Provider: anthropic/claude-3-5-sonnet-latest
-  Graph   : 1,284 nodes
-  Memory  : 47 changes across 6 sessions
+`cos plan` is analysis, not an execution guarantee. The autonomous runtime receives the plan as evidence and may re-plan when new repository/runtime information contradicts it.
 
-  Type your request. Commands: /clear  /plan <task>  /exit
+### Transactional mutations
 
-you  > extract the payment processing into its own service
+Existing files are modified through a single-file unified diff. The runtime:
 
-  [1] READ     src/core/billing/PaymentHandler.ts
-         Reading current implementation before proposing changes.
-         OK
-  [2] READ     src/api/routes/checkout.ts
-         OK
-  [3] PATCH    src/core/billing/PaymentService.ts
-  @@ -0,0 +1,42 @@
-  +export class PaymentService {
-  +  async processCharge(amount: number, currency: string) {
-  ...
-         OK
+- controls the target path itself rather than trusting patch file headers;
+- performs `git apply --check` before any write;
+- rejects stale context;
+- checks the file hash again between preflight and apply;
+- prevents project-root and symlink path escapes;
+- forbids `write_file` from silently overwriting an existing file.
 
-you  > /plan add stripe webhooks
+Create, modify, delete and file-move operations are recorded separately in SQLite so rollback can invert the correct operation.
 
-  Blast radius: 6 files
-  [1] src/core/billing/PaymentService.ts  [backend]  (ROOT)
-  [2] src/core/billing/WebhookHandler.ts  [backend]
-  [3] src/api/routes/webhooks.ts          [api]
-  ...
-```
+### Conflict-safe rollback
 
----
+Rollback is optimistic-concurrency protected. Codebase OS first verifies that the current filesystem still equals the recorded post-change state. If a developer or later agent has changed the file, rollback stops with a conflict instead of overwriting newer work.
 
-#### `cos propagate` — your changes, automatically propagated
+Session rollback runs newest transaction first and stops at the first conflict.
 
-Run `cos propagate` in a terminal. Keep working in your editor. The moment you save a TypeScript interface, a database schema, or an API type — Codebase OS detects the change, computes downstream impact, calls the AI to generate surgical patches for every affected file, and asks before applying.
+### Independent verification
 
-```
-17:34:22 CHANGED  src/types/User.ts
+After the latest mutation, a model can request `finish`, but it cannot certify itself. The verification kernel discovers applicable gates from the repository and runs them independently.
 
-  Blast radius: 4 downstream files detected
-    - src/core/auth/TokenManager.ts  [backend]  (dependent of root)
-    - src/api/routes/users.ts        [api]
-    - src/storage/UserStore.ts       [database]
-    - src/core/notifications/Email.ts [backend]
+Supported discovery currently includes:
 
-  Analyze these 4 files for required updates? Yes
+- Node package scripts: `typecheck`, `check`, `lint`, `test`, `build`;
+- Python/pytest projects;
+- Go modules;
+- Rust/Cargo projects;
+- Maven and Gradle projects;
+- .NET solutions/projects;
+- Dart/Flutter projects with a configured compatible sandbox image;
+- direct JavaScript/TypeScript and JSON parse validation for changed files.
 
-  ANALYZING src/core/auth/TokenManager.ts ... patch generated
-    +3 -1 lines
-  ANALYZING src/api/routes/users.ts ... no changes needed
-  ANALYZING src/storage/UserStore.ts ... patch generated
-    +7 -4 lines
+If code changed and no credible verification strategy can be discovered, completion fails closed.
 
-  Apply patch to src/core/auth/TokenManager.ts? Yes
-  Patched: src/core/auth/TokenManager.ts
-  Apply patch to src/storage/UserStore.ts? Yes
-  Patched: src/storage/UserStore.ts
-```
+## Command surface
 
-This is not a feature that exists in Claude Code, Codex, Cursor, or Lovable. It cannot exist in those tools architecturally — they have no persistent graph to compute downstream impact from.
+| Command | Purpose |
+|---|---|
+| `cos init` | Initialize Codebase OS state for a repository |
+| `cos scan` | Incrementally refresh persistent repository intelligence |
+| `cos scan --force` | Force full analysis rather than hash-based skipping |
+| `cos plan "<task>"` | Inspect typed blast radius and dependency-first ordering without changes |
+| `cos agent "<task>"` | Run the transactional, evidence-gated autonomous agent |
+| `cos chat` | Interactive session using the same hardened AgentLoop as `cos agent` |
+| `cos propagate` | Watch changes and propose downstream compatibility patches |
+| `cos propagate --auto` | Auto-apply candidates, retaining them only when independent verification passes |
+| `cos propagate --dry-run` | Show propagation proposals without mutation |
+| `cos fix [file]` | Run diagnostics and targeted repair workflow |
+| `cos continue` | Resume the latest durable incomplete checkpoint |
+| `cos history` | Inspect recorded Codebase OS transactions |
+| `cos rollback [id]` | Conflict-safe rollback of a recorded transaction |
+| `cos analyze <file>` | Inspect impact for a file |
+| `cos sync` | Inspect cross-layer synchronization issues |
+| `cos visualize` | Visualize the relationship graph |
+| `cos serve` | Run the local dashboard |
 
----
+## Installation
 
-## Persistent memory across every session
+Prerequisites:
 
-| Tool | Knows what you did last session | Knows which files break most often | Topological execution order |
-|:---|:---:|:---:|:---:|
-| Claude Code | No | No | No |
-| Codex | No | No | No |
-| Cursor | No | No | No |
-| Codebase OS | **Yes** | **Yes** | **Yes** |
-
-Every session is recorded in a local SQLite database. When you run `cos agent` or `cos chat`, the agent reads the last 5 sessions — what files were changed, what failed, what was left unfinished — before writing a single character.
-
----
-
-## Full command surface
-
-| Command | What it does |
-|:---|:---|
-| `cos chat` | Interactive multi-turn coding session with full project memory |
-| `cos agent "<task>"` | Autonomous one-shot agent — plans, writes, verifies, self-heals |
-| `cos plan "<task>"` | Compute blast radius and topological execution plan — no changes made |
-| `cos propagate` | Watch your files and auto-propagate changes to downstream dependents |
-| `cos scan` | Build or refresh the persistent relationship graph |
-| `cos fix [file]` | Detect and fix errors with root cause analysis |
-| `cos serve` | Start the live dashboard at localhost:3000 — streams real agent steps via SSE |
-| `cos analyze <file>` | Full impact report for a specific file |
-| `cos visualize` | Interactive browser graph visualization |
-| `cos rollback <id>` | Revert any AI-applied change, precisely and atomically |
-| `cos history` | View every change made across all sessions |
-| `cos sync` | Detect cross-layer architectural sync issues |
-
----
-
-## Setup
+- Node.js 20 or newer
+- Git
+- Docker for isolated autonomous command execution
 
 ```bash
-git clone https://github.com/dharan1007/codebase--os.git
-cd codebase-os
-npm install
-npm run build
+npm ci
+npm run verify
 npm link
+```
 
-# In your project
+Then in the repository you want Codebase OS to operate on:
+
+```bash
 cos init
 cos scan
-cos chat
+cos plan "describe the change"
+cos agent "describe the change"
 ```
 
-Configure your AI provider in `.env`:
+### Why Docker is required by default
+
+Repository build/test scripts are arbitrary code. If Docker is unavailable, Codebase OS refuses native shell execution by default. Native execution is an explicit reduced-isolation opt-in:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...
-# or
-OPENAI_API_KEY=sk-...
-# or
-GEMINI_API_KEY=...
-# or point to a local Ollama instance — no API key required
-OLLAMA_BASE_URL=http://localhost:11434
+COS_ALLOW_NATIVE_SANDBOX=1 cos agent "..."
 ```
 
----
+Do not enable that mode for untrusted repositories.
+
+## Sandbox security model
+
+When Docker is available, command execution uses a disposable workspace rather than writing through the mounted source tree. The sandbox currently provides:
+
+- read-only source bind mount;
+- disposable writable workspace;
+- read-only container root filesystem;
+- network disabled unless the requested command is a recognized install/fetch operation;
+- CPU, memory, PID, output-size and wall-time limits;
+- dropped Linux capabilities and `no-new-privileges`;
+- `.git` and `.cos` masking;
+- credential-shaped file masking (`.env`, registry credentials, PEM/key files, service-account/credential JSON patterns);
+- no inherited application credentials by default;
+- explicit environment forwarding only through `COS_SANDBOX_ENV_ALLOW`;
+- language-specific container images for supported verification commands.
+
+The sandbox is a defense layer, not a proof that arbitrary build dependencies are benign. Network-enabled package installation still executes third-party package lifecycle code inside the isolated container.
+
+## Provider configuration
+
+Supported provider families are OpenAI, Anthropic, Gemini, OpenRouter and Ollama. Provider instances are cached per credential **and model**, preventing a request for one model from accidentally reusing an instance configured for another.
+
+Codebase OS uses semantic roles (`reasoning-high`, `reasoning-fast`, `analysis-fast`, `design-premium`, `embedding-small`) rather than treating a permanent hard-coded model leaderboard as truth. Exact IDs can be pinned without changing source code, for example:
+
+```bash
+COS_OPENAI_REASONING_HIGH_MODEL=...
+COS_ANTHROPIC_REASONING_HIGH_MODEL=...
+COS_GEMINI_ANALYSIS_FAST_MODEL=...
+OPENAI_EMBEDDING_MODEL=...
+GEMINI_EMBEDDING_MODEL=...
+```
+
+Provider defaults are compatibility defaults, not benchmark claims. Model availability, account entitlements and provider limits can change independently of Codebase OS.
+
+## Retrieval
+
+Semantic retrieval is hybrid: code-body embeddings are combined with keyword retrieval and typed graph context. The current local vector implementation is **not an ANN index** and does not claim O(1) lookup. For larger corpora it performs an O(N) scan over compact deterministic sketches and loads full vectors only for the best candidates before exact cosine re-ranking.
+
+This keeps full-vector memory bounded relative to corpus size, but it is not a substitute for HNSW/DiskANN-class infrastructure at very large enterprise scale.
+
+## Persistent engineering memory
+
+Durable state lives in `.cos/cos.db` and includes:
+
+- graph nodes and edges;
+- file analyses/hashes;
+- change transactions;
+- impact/synchronization reports;
+- failure snapshots;
+- checkpoints;
+- response cache;
+- embedding cache;
+- cognitive summaries/facts.
+
+Project memory is based on recorded engineering evidence such as changed files and recurring failure snapshots. It is not advertised as perfect recollection of every previous chat token.
+
+## Propagation safety
+
+`cos propagate` does not use a stale pre-save graph. Before impact planning it re-scans the changed dependency. It then analyzes only downstream dependents, applies candidate patches through the transactional patch tool, re-scans changed targets, and runs independent project verification.
+
+If verification fails, the propagation batch is reverted when the files still match the generated post-change state. Conflicts are surfaced instead of overwriting newer work.
+
+## Local dashboard
+
+The dashboard binds only to `127.0.0.1`, applies browser security headers, constrains static file serving to the UI root, rejects non-local/cross-origin approval mutations, and falls back to an available loopback port if the preferred port is busy.
+
+## CI and release gate
+
+The repository CI runs on Node 20 and requires:
+
+```text
+npm ci
+npm run typecheck
+npm run build
+npm test
+npm pack --dry-run
+```
+
+`npm run verify` combines typecheck, build and tests, and `prepublishOnly` executes the same verification gate.
+
+A green badge means the actual GitHub Actions workflow succeeded for that ref. This README deliberately does not use a static “passing” badge.
+
+## Current scope and non-claims
+
+Codebase OS is designed to be a trustworthy software-change runtime, but the following are **not** claimed by the current implementation:
+
+- no claim of being “100× better” than another coding agent without controlled benchmark evidence;
+- no guarantee that a one-million-file repository fits in Node memory—the persistent graph is still materialized in memory;
+- no O(1) vector-search claim;
+- no claim that LLM-generated summaries are lossless memory;
+- no claim that static dependency connectivity alone proves causal impact;
+- no claim that every programming language has equivalent diagnostic/build coverage;
+- no claim that AI propagation is correct unless the independent verification evidence succeeds.
+
+These are engineering constraints, not marketing footnotes. Future scale/accuracy claims should be attached to reproducible benchmark artifacts.
+
+## Development
+
+```bash
+npm ci
+npm run typecheck
+npm run build
+npm test
+npm run verify
+```
+
+Tests currently include regression coverage for dependency-first planning and context-validated transactional patches. Production changes should add regression tests for every repaired failure mode rather than relying on prompt behavior.
+
+## License
+
+This repository is distributed under the proprietary terms in [LICENSE](LICENSE). The license permits personal/internal business use and restricts modification/redistribution without permission. Do not rely on older references that described this repository as MIT licensed.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for reporting guidance and the supported security boundary.
 
 ---
 
-## Built for Billion-Dollar Scales
-
-While other agents crash on large codebases, Codebase OS is architected for the enterprise monorepo.
-
-*   **Streaming Scanner**: Processes 1M+ files in bounded memory windows (200 files at a time). Never hits the Node.js 1.5GB heap limit.
-*   **Two-Stage Vector Search**: $O(1)$ retrieval using SQL-side "Sketch" pre-filtering. Scans 100k+ code chunks in milliseconds without loading blobs into JS memory.
-*   **Persistent Cognitive State**: Replaces the "Sliding Window" with an LLM-compressed session summary. The agent remembers critical discoveries from Step 1 even at Step 50.
-*   **Adaptive Topological Planning**: Centrality-weighted graph traversal. Hub nodes get deep blast-radius analysis (up to depth 20), while leaves remain shallow.
-
----
-
-## Under the hood
-
-- **Relationship Graph**: Persistent SQLite-backed directed graph with $O(1)$ reverse indexing and Kahn's topological sort.
-- **Cognitive State**: Three-tier memory (Working / Session / Long-term) with LLM-based compression and SQLite persistence.
-- **Execution model**: Unified diff patching with path-sandbox validation. Read-only project mounts and ephemeral write volumes.
-- **Security**: Prompt injection scrubbing for all external data. Meta-character rejection engine for shell execution.
-- **Persistence**: Optimized SQLite core with WAL mode, busy timeouts, and 512MB memory-mapped I/O for massive corpora.
-- **SSE Dashboard**: Real-time step streaming and task-plan tracking at localhost:3000.
-
----
-
-## Providers
-
-Works with every major provider and routes by task type:
-
-| Provider | Models | Notes |
-|:---|:---|:---|
-| Anthropic | claude-3-5-sonnet, claude-3-5-haiku | Recommended for reasoning tasks |
-| OpenAI | gpt-4o, gpt-4o-mini, o1 | Strong for code generation |
-| Google | gemini-2.0-flash, gemini-1.5-pro | Fast, high context window |
-| Ollama | qwen2.5-coder, deepseek-coder, llama3 | Fully local, zero API cost |
-
----
-
-## Who this is for
-
-Engineers who have used Claude Code and thought: *"Why does it keep making changes in the wrong order?"*
-
-Engineers who have used Cursor and thought: *"Why doesn't it know what I did yesterday?"*
-
-Engineers working on repositories too large for a context window.
-
-Engineers who want a coding agent that runs fully locally, with zero subscription cost, using their own hardware.
-
----
-
-**Built by Dharantej Reddy Poduvu**
-[dharan.poduvu@gmail.com](mailto:dharan.poduvu@gmail.com) · [GitHub](https://github.com/dharan1007)
+Built by Dharantej Reddy Poduvu.
