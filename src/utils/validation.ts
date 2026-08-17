@@ -48,25 +48,25 @@ export class TypeScriptValidator {
 
     validateFile(filePath: string, content: string): ValidationResult {
         try {
-            let sf: SourceFile | undefined = this.project.getSourceFile(filePath);
-            if (sf) {
-                sf.replaceWithText(content);
+            let sourceFile: SourceFile | undefined = this.project.getSourceFile(filePath);
+            if (sourceFile) {
+                sourceFile.replaceWithText(content);
             } else {
-                sf = this.project.createSourceFile(filePath, content, { overwrite: true });
+                sourceFile = this.project.createSourceFile(filePath, content, { overwrite: true });
             }
 
-            const diagnostics: Diagnostic[] = sf.getPreEmitDiagnostics();
+            const diagnostics: Diagnostic[] = sourceFile.getPreEmitDiagnostics();
             const errors: ValidationError[] = [];
             const warnings: ValidationWarning[] = [];
 
-            for (const diag of diagnostics) {
-                const start = diag.getStart();
-                const sourceFile = diag.getSourceFile();
+            for (const diagnostic of diagnostics) {
+                const start = diagnostic.getStart();
+                const diagnosticSourceFile = diagnostic.getSourceFile();
                 let line = 0;
                 let column = 0;
 
-                if (start !== undefined && sourceFile) {
-                    const pos = sourceFile.getLineAndColumnAtPos(start);
+                if (start !== undefined && diagnosticSourceFile) {
+                    const pos = diagnosticSourceFile.getLineAndColumnAtPos(start);
                     line = pos.line;
                     column = pos.column;
                 }
@@ -75,27 +75,40 @@ export class TypeScriptValidator {
                     file: filePath,
                     line,
                     column,
-                    message: diag.getMessageText().toString(),
-                    code: diag.getCode(),
+                    message: diagnostic.getMessageText().toString(),
+                    code: diagnostic.getCode(),
                 };
 
-                if (diag.getCategory() === DiagnosticCategory.Error) {
+                if (diagnostic.getCategory() === DiagnosticCategory.Error) {
                     errors.push(entry);
-                } else if (diag.getCategory() === DiagnosticCategory.Warning) {
+                } else if (diagnostic.getCategory() === DiagnosticCategory.Warning) {
                     warnings.push(entry);
                 }
             }
 
             return { valid: errors.length === 0, errors, warnings };
         } catch (err) {
-            logger.debug('TypeScript validation error', { error: String(err), file: filePath });
-            return { valid: true, errors: [], warnings: [] };
+            const message = `Validator execution failed: ${String(err)}`;
+            logger.warn('TypeScript validation failed closed', { error: String(err), file: filePath });
+            return {
+                valid: false,
+                errors: [{
+                    file: filePath,
+                    line: 0,
+                    column: 0,
+                    message,
+                    // A synthetic compiler-range code keeps callers that gate on
+                    // low-numbered TS diagnostics from accidentally ignoring this.
+                    code: 1999,
+                }],
+                warnings: [],
+            };
         }
     }
 
     validateSyntax(content: string, filePath: string): boolean {
         const result = this.validateFile(filePath, content);
-        return result.errors.filter(e => e.code < 2000).length === 0;
+        return result.valid && result.errors.filter(e => e.code < 2000).length === 0;
     }
 }
 
@@ -113,31 +126,29 @@ export function validateSchema(data: any, schema: any): boolean {
     return Object.keys(schema).every(key => key in data);
 }
 
+/**
+ * Removes a single outer Markdown code fence when a provider ignored the
+ * raw-code-only instruction. Internal fences are preserved.
+ */
 export function sanitizeAIOutput(raw: string): string {
-    return raw.trim();
+    const trimmed = raw.trim();
+    const fenced = trimmed.match(/^```(?:[\w.+-]+)?\s*\n([\s\S]*?)\n```$/);
+    return fenced ? fenced[1]!.trim() : trimmed;
 }
 
-/**
- * [ARCHITECTURAL HARDENING]: Fuzzy JSON Search Engine
- * This implementation is physically incapable of failing just because 
- * the AI added conversational filler (e.g. "Sure, here is the JSON:").
- * It uses a sliding-window bracket matcher to find the first valid JSON object.
- */
+/** Extracts the first parseable JSON object/array from provider output. */
 export function extractJSONFromAIOutput(raw: string): any {
     const content = raw.trim();
-    
-    // Attempt 1: Standard parse
-    try { return JSON.parse(content); } catch { }
 
-    // Attempt 2: Search for JSON blocks in backticks
+    try { return JSON.parse(content); } catch { /* continue */ }
+
     const fenceMatches = [...content.matchAll(/```(?:json)?\n?([\s\S]*?)```/g)];
     for (const match of fenceMatches) {
         try {
-            return JSON.parse(match[1].trim());
-        } catch { }
+            return JSON.parse(match[1]!.trim());
+        } catch { /* continue */ }
     }
 
-    // Attempt 3: Sliding window bracket matching (Deep Search)
     const firstBrace = content.indexOf('{');
     const lastBrace = content.lastIndexOf('}');
     const firstBracket = content.indexOf('[');
@@ -149,16 +160,14 @@ export function extractJSONFromAIOutput(raw: string): any {
     if (start !== -1 && end !== -1 && end > start) {
         const candidate = content.substring(start, end + 1);
         try {
-            // Basic "AI Self-Repair": remove trailing commas before parsing
             const repaired = candidate.replace(/,(\s*[\]\}])/g, '$1');
             return JSON.parse(repaired);
         } catch {
-            // Last resort: try the raw candidate
-            try { return JSON.parse(candidate); } catch { }
+            try { return JSON.parse(candidate); } catch { /* continue */ }
         }
     }
 
-    throw new Error('No valid JSON structure found in AI response after deep extraction.');
+    throw new Error('No valid JSON structure found in AI response.');
 }
 
 // ─── Agent Action Schema ──────────────────────────────────────────────────────
@@ -174,7 +183,6 @@ const AgentToolEnum = z.enum([
     'search_code',
     'find_references',
     'pause_and_ask',
-    'spawn_sub_agent',
     'finish',
 ]);
 
@@ -187,10 +195,6 @@ export const AgentActionSchema = z.object({
 
 export type AgentActionValidated = z.infer<typeof AgentActionSchema>;
 
-/**
- * Validates a raw parsed agent action against the schema and enforces path safety.
- * Throws with a clear repair message on failure so the agent can self-correct.
- */
 export function validateAgentAction(raw: unknown, rootDir: string): AgentActionValidated {
     const result = AgentActionSchema.safeParse(raw);
     if (!result.success) {
@@ -199,35 +203,37 @@ export function validateAgentAction(raw: unknown, rootDir: string): AgentActionV
     }
 
     const action = result.data;
+    const pathArgs = [
+        action.args['path'],
+        action.args['oldPath'],
+        action.args['newPath'],
+        action.args['dir'],
+    ].filter((value): value is string => Boolean(value));
 
-    // Path sandbox: reject absolute paths or paths escaping rootDir
-    const pathArg = action.args['path'] || action.args['oldPath'] || action.args['newPath'];
-    if (pathArg) {
+    for (const pathArg of pathArgs) {
         if (path.isAbsolute(pathArg)) {
             throw new Error(
                 `[PATH SANDBOX VIOLATION]: "${pathArg}" is an absolute path. ` +
-                `You MUST use paths relative to the project root. Correct the path and retry.`
+                'Use paths relative to the project root.',
             );
         }
         const resolved = path.resolve(rootDir, pathArg);
         const rootResolved = path.resolve(rootDir);
         if (!resolved.startsWith(rootResolved + path.sep) && resolved !== rootResolved) {
             throw new Error(
-                `[PATH SANDBOX VIOLATION]: "${pathArg}" escapes the project root. ` +
-                `All file paths must be relative and within the project. Correct the path and retry.`
+                `[PATH SANDBOX VIOLATION]: "${pathArg}" escapes the project root.`,
             );
         }
     }
 
-    // Content presence: write_file and patch_file must have non-empty content/diff
     if (action.tool === 'write_file' && (!action.args['content'] || action.args['content'].trim().length === 0)) {
-        throw new Error('[CONTENT VIOLATION]: write_file requires a non-empty "content" argument. Provide the full file content.');
+        throw new Error('[CONTENT VIOLATION]: write_file requires non-empty "content".');
     }
     if (action.tool === 'patch_file' && (!action.args['diff'] || action.args['diff'].trim().length === 0)) {
-        throw new Error('[CONTENT VIOLATION]: patch_file requires a non-empty "diff" argument in unified diff format.');
+        throw new Error('[CONTENT VIOLATION]: patch_file requires a non-empty unified "diff".');
     }
     if (action.tool === 'finish' && (!action.args['summary'] || action.args['summary'].trim().length === 0)) {
-        throw new Error('[CONTENT VIOLATION]: finish requires a non-empty "summary" argument describing what was accomplished.');
+        throw new Error('[CONTENT VIOLATION]: finish requires a non-empty "summary".');
     }
 
     return action;
