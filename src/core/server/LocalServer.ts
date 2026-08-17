@@ -6,203 +6,281 @@ import { EventEmitter } from 'events';
 import { FailureStore } from '../failure/FailureStore.js';
 import { ResourceMonitor } from '../orchestrator/ResourceMonitor.js';
 
-// Resolve UI root relative to the installed package — works from both src and dist
-// Resolve UI root relative to the installed package — works from both src and dist
-let UI_ROOT = path.join(__dirname, '../../ui');
-// Fast-failover for development: check src/ui directly if dist/ui is missing or vice-versa
+const LOOPBACK_HOST = '127.0.0.1';
+
+let UI_ROOT = path.resolve(__dirname, '../../ui');
 if (!fs.existsSync(UI_ROOT)) {
-    const alternative = path.join(process.cwd(), 'src', 'ui');
-    if (fs.existsSync(alternative)) {
-        UI_ROOT = alternative;
-    } else {
-        const distAlt = path.join(process.cwd(), 'dist', 'ui');
-        if (fs.existsSync(distAlt)) UI_ROOT = distAlt;
-    }
+    const sourceUi = path.resolve(process.cwd(), 'src', 'ui');
+    const distUi = path.resolve(process.cwd(), 'dist', 'ui');
+    if (fs.existsSync(sourceUi)) UI_ROOT = sourceUi;
+    else if (fs.existsSync(distUi)) UI_ROOT = distUi;
 }
 
 export class LocalServer extends EventEmitter {
     private server: http.Server;
-    private port = 3000;
+    private port: number;
     private currentPendingAction: any = null;
     private sseClients: http.ServerResponse[] = [];
     private recentSteps: any[] = [];
     private activeProvider = 'unknown';
     private activeModel = 'unknown';
+    private started = false;
 
     constructor(
         private failureStore?: FailureStore,
-        public resourceMonitor?: ResourceMonitor
+        public resourceMonitor?: ResourceMonitor,
     ) {
         super();
+        this.port = this.parsePort(process.env['COS_DASHBOARD_PORT'], 3000);
         this.server = http.createServer((req, res) => this.handleRequest(req, res));
     }
 
-    start() {
-        this.server.listen(this.port, () => {
-            logger.info(`[SERVER] Visual UI running at http://localhost:${this.port}`);
-            console.log(`\n\x1b[36m[DASHBOARD]\x1b[0m Codebase OS live at \x1b[4mhttp://localhost:${this.port}\x1b[0m\n`);
+    start(): void {
+        if (this.started || this.server.listening) return;
+        this.started = true;
+
+        const onListening = (): void => {
+            const address = this.server.address();
+            if (address && typeof address === 'object') this.port = address.port;
+            const url = `http://${LOOPBACK_HOST}:${this.port}`;
+            logger.info(`[SERVER] Visual UI listening on loopback at ${url}`);
+            console.log(`\n\x1b[36m[DASHBOARD]\x1b[0m Codebase OS live at \x1b[4m${url}\x1b[0m\n`);
+        };
+
+        this.server.once('listening', onListening);
+        this.server.once('error', (err: NodeJS.ErrnoException) => {
+            if (err.code === 'EADDRINUSE') {
+                logger.warn(`Dashboard port ${this.port} is busy; selecting an ephemeral loopback port.`);
+                this.server.once('listening', onListening);
+                this.server.listen(0, LOOPBACK_HOST);
+                return;
+            }
+            this.started = false;
+            logger.error('Dashboard server failed to start', { error: err.message });
         });
+        this.server.listen(this.port, LOOPBACK_HOST);
     }
 
-    stop() {
-        // Close all SSE clients
+    stop(): void {
         for (const client of this.sseClients) {
             try { client.end(); } catch { /* already closed */ }
         }
         this.sseClients = [];
-        this.server.close();
+        if (this.server.listening) this.server.close();
+        this.started = false;
     }
 
-    /** Called by AgentLoop on every step to broadcast to dashboard */
-    emitStep(stepData: { step: number; action: any; result: any }) {
+    emitStep(stepData: { step: number; action: any; result: any }): void {
         this.recentSteps.push({ ...stepData, timestamp: Date.now() });
         if (this.recentSteps.length > 50) this.recentSteps.shift();
         this.broadcastSSE('step', stepData);
     }
 
-    setActiveModel(provider: string, model: string) {
+    setActiveModel(provider: string, model: string): void {
         this.activeProvider = provider;
         this.activeModel = model;
         this.broadcastSSE('model', { provider, model });
     }
 
-    setPendingAction(action: any) {
+    setPendingAction(action: any): void {
         this.currentPendingAction = action;
         this.emit('action_staged', action);
         this.broadcastSSE('pending_action', action);
     }
 
-    clearPendingAction() {
+    clearPendingAction(): void {
         this.currentPendingAction = null;
     }
 
-    private broadcastSSE(event: string, data: any) {
+    private broadcastSSE(event: string, data: any): void {
         const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
         for (const client of this.sseClients) {
             try { client.write(payload); } catch { /* client disconnected */ }
         }
-        // Prune dead clients
-        this.sseClients = this.sseClients.filter(c => !c.destroyed);
+        this.sseClients = this.sseClients.filter(client => !client.destroyed);
     }
 
-    private handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
+        this.applySecurityHeaders(res);
 
-        if (req.method === 'OPTIONS') {
-            res.writeHead(204);
-            return res.end();
+        const origin = req.headers.origin;
+        if (origin && this.isTrustedOrigin(origin)) {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+            res.setHeader('Vary', 'Origin');
         }
 
-        // --- SSE stream for real-time agent events ---
+        if (req.method === 'OPTIONS') {
+            if (origin && !this.isTrustedOrigin(origin)) {
+                res.writeHead(403);
+                res.end('Forbidden');
+                return;
+            }
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+            res.writeHead(204);
+            res.end();
+            return;
+        }
+
         if (req.method === 'GET' && req.url === '/events') {
             res.writeHead(200, {
                 'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                Connection: 'keep-alive',
                 'X-Accel-Buffering': 'no',
             });
             res.write(':ok\n\n');
             this.sseClients.push(res);
-
-            // Send current backlog immediately
             for (const step of this.recentSteps) {
                 res.write(`event: step\ndata: ${JSON.stringify(step)}\n\n`);
             }
-
             req.on('close', () => {
-                this.sseClients = this.sseClients.filter(c => c !== res);
+                this.sseClients = this.sseClients.filter(client => client !== res);
             });
             return;
         }
 
-        // --- Real stats from DB/store ---
         if (req.method === 'GET' && req.url === '/api/stats') {
             const failures = this.failureStore ? this.failureStore.getFrequentFailures(1) : [];
             const budgetReport = this.resourceMonitor ? this.resourceMonitor.getReport() : [];
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({
+            this.writeJson(res, 200, {
                 failureCount: failures.length,
-                recurringCount: failures.filter((f: any) => f.frequency >= 3).length,
+                recurringCount: failures.filter((failure: any) => failure.frequency >= 3).length,
                 recentFailures: failures.slice(0, 5),
                 budgetReport,
                 activeProvider: this.activeProvider,
                 activeModel: this.activeModel,
                 stepCount: this.recentSteps.length,
-            }));
+            });
+            return;
         }
 
-        // --- Last N agent steps ---
         if (req.method === 'GET' && req.url?.startsWith('/api/steps')) {
-            const n = 20;
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ steps: this.recentSteps.slice(-n) }));
+            this.writeJson(res, 200, { steps: this.recentSteps.slice(-20) });
+            return;
         }
 
-        // --- Approve / reject pending high-risk action ---
-        if (req.method === 'POST' && req.url === '/api/approve') {
-            this.emit('approve');
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ status: 'approved' }));
-        }
-
-        if (req.method === 'POST' && req.url === '/api/reject') {
-            this.emit('reject');
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ status: 'rejected' }));
+        if (req.method === 'POST' && (req.url === '/api/approve' || req.url === '/api/reject')) {
+            if (!this.isTrustedMutationRequest(req)) {
+                this.writeJson(res, 403, { error: 'Cross-origin dashboard mutation rejected.' });
+                return;
+            }
+            const approved = req.url === '/api/approve';
+            this.emit(approved ? 'approve' : 'reject');
+            this.writeJson(res, 200, { status: approved ? 'approved' : 'rejected' });
+            return;
         }
 
         if (req.method === 'GET' && req.url === '/api/pending-action') {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify(this.currentPendingAction || null));
+            this.writeJson(res, 200, this.currentPendingAction || null);
+            return;
         }
 
-        // --- Serve static UI files ---
-        // Handle /favicon.ico request gracefully even if not exist
         if (req.url === '/favicon.ico') {
-            res.writeHead(204); // No Content
-            return res.end();
+            res.writeHead(204);
+            res.end();
+            return;
         }
 
-        let urlPath = req.url === '/' ? 'index.html' : (req.url ?? 'index.html');
-        // Sanitize: remove leading slashes and query params to avoid path traversal/nonsense
-        urlPath = urlPath.split('?')[0].replace(/^\/+/, '');
+        this.serveStatic(req, res);
+    }
 
-        const filePath = path.join(UI_ROOT, urlPath);
+    private serveStatic(req: http.IncomingMessage, res: http.ServerResponse): void {
+        let rawPath = req.url === '/' ? 'index.html' : (req.url ?? 'index.html').split('?')[0]!;
+        try {
+            rawPath = decodeURIComponent(rawPath);
+        } catch {
+            res.writeHead(400);
+            res.end('Bad Request');
+            return;
+        }
+        rawPath = rawPath.replace(/^\/+/, '');
 
-        const ext = path.extname(filePath).toLowerCase();
+        const uiRoot = path.resolve(UI_ROOT);
+        const candidate = path.resolve(uiRoot, rawPath);
+        if (candidate !== uiRoot && !candidate.startsWith(uiRoot + path.sep)) {
+            res.writeHead(403);
+            res.end('Forbidden');
+            return;
+        }
+
+        const ext = path.extname(candidate).toLowerCase();
         const mimeMap: Record<string, string> = {
-            '.html': 'text/html',
-            '.js': 'text/javascript',
-            '.css': 'text/css',
-            '.json': 'application/json',
+            '.html': 'text/html; charset=utf-8',
+            '.js': 'text/javascript; charset=utf-8',
+            '.css': 'text/css; charset=utf-8',
+            '.json': 'application/json; charset=utf-8',
             '.png': 'image/png',
+            '.webp': 'image/webp',
             '.svg': 'image/svg+xml',
             '.ico': 'image/x-icon',
         };
-        const contentType = mimeMap[ext] ?? 'text/plain';
+        const contentType = mimeMap[ext] ?? 'application/octet-stream';
 
-        fs.readFile(filePath, (err, content) => {
-            if (err) {
-                // Fallback to index.html for SPA routing only for extensionless or .html paths
-                if (ext === '' || ext === '.html') {
-                    fs.readFile(path.join(UI_ROOT, 'index.html'), (err2, fallback) => {
-                        if (err2) {
-                            res.writeHead(404);
-                            return res.end('Not Found');
-                        }
-                        res.writeHead(200, { 'Content-Type': 'text/html' });
-                        res.end(fallback, 'utf-8');
-                    });
-                } else {
-                    res.writeHead(404);
-                    res.end('Not Found');
-                }
-            } else {
+        fs.readFile(candidate, (err, content) => {
+            if (!err) {
                 res.writeHead(200, { 'Content-Type': contentType });
-                res.end(content, 'utf-8');
+                res.end(content);
+                return;
             }
+
+            if (ext === '' || ext === '.html') {
+                const fallbackPath = path.resolve(uiRoot, 'index.html');
+                fs.readFile(fallbackPath, (fallbackError, fallback) => {
+                    if (fallbackError) {
+                        res.writeHead(404);
+                        res.end('Not Found');
+                        return;
+                    }
+                    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                    res.end(fallback);
+                });
+                return;
+            }
+
+            res.writeHead(404);
+            res.end('Not Found');
         });
+    }
+
+    private applySecurityHeaders(res: http.ServerResponse): void {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Referrer-Policy', 'no-referrer');
+        res.setHeader('X-Frame-Options', 'DENY');
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        res.setHeader(
+            'Content-Security-Policy',
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+            "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+        );
+    }
+
+    private isTrustedMutationRequest(req: http.IncomingMessage): boolean {
+        const remote = req.socket.remoteAddress;
+        if (remote && !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote)) return false;
+        const origin = req.headers.origin;
+        return !origin || this.isTrustedOrigin(origin);
+    }
+
+    private isTrustedOrigin(origin: string): boolean {
+        try {
+            const parsed = new URL(origin);
+            const localHost = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]';
+            const port = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80;
+            return localHost && port === this.port;
+        } catch {
+            return false;
+        }
+    }
+
+    private writeJson(res: http.ServerResponse, statusCode: number, payload: unknown): void {
+        res.setHeader('Cache-Control', 'no-store');
+        res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(payload));
+    }
+
+    private parsePort(value: string | undefined, fallback: number): number {
+        const parsed = Number.parseInt(value ?? '', 10);
+        return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback;
     }
 }
