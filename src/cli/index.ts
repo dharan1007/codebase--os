@@ -87,8 +87,12 @@ program.addCommand(planCommand());
 program.addCommand(chatCommand());
 program.addCommand(propagateCommand());
 
-process.on('SIGINT', () => {
+process.once('SIGINT', () => {
     console.log(chalk.yellow('\nOperation cancelled.'));
+    process.exitCode = 130;
+    // Give command/database cleanup listeners a short synchronous/asynchronous
+    // window, then guarantee termination even for a stuck long-running handle.
+    setTimeout(() => process.exit(130), 500).unref();
 });
 
 process.on('unhandledRejection', reason => {
