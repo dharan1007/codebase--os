@@ -25,9 +25,10 @@ export class ModelRouter {
     }
 
     getProviderForTask(taskType: string): AIProvider {
-        const semanticRole = this.semanticRole(taskType as TaskType);
+        const semanticRole = this.semanticRole(taskType);
+        const supportedTaskType: TaskType = this.toTaskType(taskType);
         const chain = this.selectProvider({
-            taskType: taskType as TaskType,
+            taskType: supportedTaskType,
             priority: 'medium',
             context: 'provider-selection',
             maxTokens: 2000,
@@ -64,7 +65,6 @@ export class ModelRouter {
             return scoreB - scoreA || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model);
         });
 
-        // De-duplicate exact provider/model pairs while preserving ranking.
         const unique: ProviderSelection[] = [];
         const seen = new Set<string>();
         for (const candidate of sorted) {
@@ -74,7 +74,6 @@ export class ModelRouter {
             unique.push(candidate);
         }
 
-        // Keep provider diversity near the front of the fallback chain.
         if (unique.length >= 2 && unique[0]!.provider === unique[1]!.provider) {
             const differentIndex = unique.findIndex((candidate, index) =>
                 index > 0 && candidate.provider !== unique[0]!.provider,
@@ -88,7 +87,7 @@ export class ModelRouter {
         return unique;
     }
 
-    private getCandidatePool(taskType: TaskType): ProviderSelection[] {
+    private getCandidatePool(taskType: TaskType | string): ProviderSelection[] {
         const semanticRole = this.semanticRole(taskType);
         const pool: ProviderSelection[] = [];
         const configuredProvider = this.config.ai.provider as AIProviderKind;
@@ -122,19 +121,19 @@ export class ModelRouter {
         return pool;
     }
 
-    private semanticRole(taskType: TaskType): SemanticModelSlug {
-        switch (taskType) {
-            case 'simple':
-                return 'reasoning-fast';
-            case 'analysis':
-            case 'sync':
-                return 'analysis-fast';
-            case 'code':
-            case 'fix':
-            case 'reasoning':
-            default:
-                return 'reasoning-high';
+    private semanticRole(taskType: TaskType | string): SemanticModelSlug {
+        if (taskType === 'simple') return 'reasoning-fast';
+        if (taskType === 'analysis' || taskType === 'sync') return 'analysis-fast';
+        if (taskType === 'design') return 'design-premium';
+        return 'reasoning-high';
+    }
+
+    private toTaskType(taskType: string): TaskType {
+        if (taskType === 'simple' || taskType === 'analysis' || taskType === 'reasoning' || taskType === 'design') {
+            return taskType;
         }
+        if (taskType === 'sync') return 'analysis';
+        return 'reasoning';
     }
 
     private checkKeyAvailability(provider: AIProviderKind): boolean {
