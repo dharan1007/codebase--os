@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// ─── Graph Types ──────────────────────────────────────────────────────────────
+// ─── Node Types ──────────────────────────────────────────────────────────────
 
 export type NodeKind =
     | 'file'
@@ -9,17 +9,16 @@ export type NodeKind =
     | 'interface'
     | 'type'
     | 'variable'
+    | 'constant'
+    | 'enum'
     | 'api_endpoint'
     | 'db_table'
     | 'db_column'
+    | 'db_relation'
     | 'component'
     | 'hook'
-    | 'route'
-    | 'config'
-    | 'test'
-    | 'schema'
-    | 'query'
-    | 'mutation';
+    | 'module'
+    | 'package';
 
 export type EdgeKind =
     | 'imports'
@@ -30,15 +29,15 @@ export type EdgeKind =
     | 'uses_type'
     | 'reads_from'
     | 'writes_to'
-    | 'provides'
-    | 'tests'
     | 'depends_on'
+    | 'provides'
     | 'references'
     | 'api_uses'
     | 'db_uses'
-    | 'renders';
+    | 'renders'
+    | 'tests';
 
-export type Layer = 'database' | 'backend' | 'api' | 'frontend' | 'config' | 'infrastructure' | 'unknown';
+export type Layer = 'database' | 'backend' | 'api' | 'frontend' | 'config' | 'infrastructure';
 
 export type Language =
     | 'typescript'
@@ -63,12 +62,17 @@ export type Language =
     | 'yaml'
     | 'json'
     | 'dockerfile'
-    | 'mixed'
     | 'unknown';
 
+export interface Position {
+    line: number;
+    column: number;
+}
+
 export interface SourceLocation {
-    start: { line: number; column: number };
-    end: { line: number; column: number };
+    file: string;
+    start: Position;
+    end: Position;
 }
 
 export interface GraphNode {
@@ -98,52 +102,77 @@ export interface GraphEdge {
     createdAt: number;
 }
 
-// ─── Impact Types ─────────────────────────────────────────────────────────────
+export interface RelationshipGraph {
+    nodes: Map<string, GraphNode>;
+    edges: Map<string, GraphEdge>;
+    adjacency: Map<string, Set<string>>;
+    reverseAdjacency: Map<string, Set<string>>;
+}
 
-export interface TriggerChange {
+// ─── Change Types ─────────────────────────────────────────────────────────────
+
+export type ChangeType =
+    | 'added'
+    | 'modified'
+    | 'deleted'
+    | 'renamed'
+    | 'moved';
+
+export type ChangeSeverity = 'breaking' | 'major' | 'minor' | 'patch';
+
+export type ChangeScope =
+    | 'schema'
+    | 'api_contract'
+    | 'type_definition'
+    | 'business_logic'
+    | 'configuration'
+    | 'dependency'
+    | 'ui_component'
+    | 'test'
+    | 'documentation';
+
+export interface FileChange {
+    id: string;
     filePath: string;
-    nodeId?: string;
-    changeType: 'create' | 'modify' | 'delete' | 'rename';
-    description?: string;
+    changeType: ChangeType;
+    oldContent?: string;
+    newContent?: string;
+    timestamp: number;
+    diff?: string;
 }
 
 export interface ImpactedNode {
     node: GraphNode;
-    depth: number;
-    path: string[];
     reason: string;
-    confidence: number;
-}
-
-export interface CrossLayerIssue {
-    sourceLayer: Layer;
-    targetLayer: Layer;
-    sourceNode: string;
-    targetNode: string;
-    edgeKind: EdgeKind;
-    severity: 'info' | 'warning' | 'error';
-    message: string;
+    severity: ChangeSeverity;
+    propagationDepth: number;
+    requiresUpdate: boolean;
+    suggestedAction?: string;
 }
 
 export interface ImpactReport {
     id: string;
-    triggerChange: TriggerChange;
+    triggerChange: FileChange;
     impactedNodes: ImpactedNode[];
     affectedLayers: Layer[];
-    severity: 'low' | 'medium' | 'high' | 'critical';
-    scope: {
-        files: string[];
-        functions: string[];
-        apiEndpoints: string[];
-        dbTables: string[];
-        components: string[];
-    };
+    severity: ChangeSeverity;
+    scope: ChangeScope[];
     crossLayerIssues: CrossLayerIssue[];
     timestamp: number;
     summary: string;
 }
 
-// ─── Diagnostics Types ────────────────────────────────────────────────────────
+export interface CrossLayerIssue {
+    description: string;
+    sourceLayer: Layer;
+    targetLayer: Layer;
+    severity: ChangeSeverity;
+    affectedNodeIds: string[];
+    resolution?: string;
+    autoFixable?: boolean;
+}
+
+// ─── Diagnostic & Failure Types ──────────────────────────────────────────────
 
 export interface Diagnostic {
     file: string;
@@ -153,6 +182,7 @@ export interface Diagnostic {
     code?: string;
     severity: 'error' | 'warning';
     tool: string;
+    metadata?: Record<string, any>;
 }
 
 export interface DiagnosticReport {
@@ -162,11 +192,12 @@ export interface DiagnosticReport {
     durationMs: number;
 }
 
+export type FailureCategory = 'ai_timeout' | 'test_regression' | 'parse_error' | 'permission_denied' | 'model_outage' | 'runtime_crash' | 'interface_mismatch' | 'logic_drift';
+
 export interface FailureSnapshot {
     id: string;
-    category: 'compile_error' | 'runtime_crash' | 'test_regression' | 'parse_error' | 'logic_drift';
+    category: FailureCategory;
     filePath: string;
-    signature?: string;
     message: string;
     stackTrace?: string;
     contextBefore: string;
@@ -332,7 +363,7 @@ export const ProjectConfigSchema = z.object({
     language: z.enum([
         'typescript', 'javascript', 'python', 'go', 'rust', 'java', 'csharp',
         'kotlin', 'swift', 'dart', 'ruby', 'php', 'c', 'cpp', 'html', 'css', 'scss',
-        'sql', 'graphql', 'yaml', 'json', 'dockerfile', 'mixed', 'unknown',
+        'sql', 'graphql', 'yaml', 'json', 'dockerfile', 'mixed', 'unknown'
     ]),
     layers: z.object({
         database: z.array(z.string()).default([]),
@@ -354,7 +385,7 @@ export const ProjectConfigSchema = z.object({
     }).default({
         autoResolvePortConflicts: true,
         autoResolveRuntimeVersions: true,
-        dockerSocket: '/var/run/docker.sock',
+        dockerSocket: '/var/run/docker.sock'
     }),
     watch: z.object({
         debounceMs: z.number().default(500),
@@ -363,7 +394,7 @@ export const ProjectConfigSchema = z.object({
     }).default({
         debounceMs: 500,
         autoAnalyze: true,
-        autoApply: false,
+        autoApply: false
     }),
 });
 
@@ -388,7 +419,7 @@ export interface ChangeRecord {
     confidence: number;
     impactReportId?: string;
     operation?: ChangeOperation;
-    /** Original path for move operations; `filePath` is the destination path. */
+    /** Original path for a move; filePath stores the destination path. */
     sourcePath?: string;
 }
 
@@ -400,7 +431,10 @@ export interface ParsedFunction {
     returnType?: string;
     isAsync: boolean;
     isExported: boolean;
+    docComment?: string;
     location: SourceLocation;
+    calls: string[];
+    usesTypes: string[];
 }
 
 export interface ParsedClass {
@@ -408,13 +442,25 @@ export interface ParsedClass {
     extends?: string;
     implements: string[];
     methods: ParsedFunction[];
+    properties: ParsedProperty[];
     isExported: boolean;
+    docComment?: string;
+    location: SourceLocation;
+}
+
+export interface ParsedProperty {
+    name: string;
+    type?: string;
+    optional: boolean;
+    readonly: boolean;
     location: SourceLocation;
 }
 
 export interface ParsedInterface {
     name: string;
     extends: string[];
+    properties: ParsedProperty[];
+    methods: ParsedFunction[];
     isExported: boolean;
     location: SourceLocation;
 }
@@ -422,47 +468,82 @@ export interface ParsedInterface {
 export interface ParsedImport {
     source: string;
     specifiers: string[];
-    isTypeOnly: boolean;
+    isDefault: boolean;
+    isNamespace: boolean;
+    resolvedPath?: string;
 }
 
 export interface ParsedExport {
     name: string;
-    source?: string;
+    kind: 'function' | 'class' | 'interface' | 'type' | 'variable' | 'default' | 're-export';
     isDefault: boolean;
 }
 
-export interface APIEndpoint {
-    method: string;
+export interface ParsedAPIEndpoint {
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD';
     path: string;
-    handler?: string;
+    handler: string;
+    middleware: string[];
+    requestBody?: string;
+    responseType?: string;
     location: SourceLocation;
+}
+
+export interface ParsedDBSchema {
+    tableName: string;
+    columns: ParsedDBColumn[];
+    relations: ParsedDBRelation[];
+    location: SourceLocation;
+}
+
+export interface ParsedDBColumn {
+    name: string;
+    type: string;
+    nullable: boolean;
+    primaryKey: boolean;
+    unique: boolean;
+    defaultValue?: string;
+    references?: { table: string; column: string };
+}
+
+export interface ParsedDBRelation {
+    kind: 'one-to-one' | 'one-to-many' | 'many-to-many';
+    targetTable: string;
+    foreignKey: string;
+    joinTable?: string;
 }
 
 export interface FileAnalysis {
     filePath: string;
     language: Language;
     layer: Layer;
+    hash: string;
     imports: ParsedImport[];
     exports: ParsedExport[];
     functions: ParsedFunction[];
     classes: ParsedClass[];
     interfaces: ParsedInterface[];
-    apiEndpoints: APIEndpoint[];
-    dbTables: string[];
+    types: Array<{ name: string; definition: string; location: SourceLocation; isExported: boolean }>;
+    variables: Array<{ name: string; type?: string; isConst: boolean; isExported: boolean; location: SourceLocation }>;
+    apiEndpoints: ParsedAPIEndpoint[];
+    dbSchemas: ParsedDBSchema[];
+    analyzedAt: number;
     errors: string[];
-    hash: string;
 }
 
-// ─── Synchronization Types ────────────────────────────────────────────────────
+// ─── Sync Types ───────────────────────────────────────────────────────────────
 
 export interface SyncIssue {
     id: string;
-    type: string;
-    severity: 'info' | 'warning' | 'error';
+    kind: 'type_mismatch' | 'missing_field' | 'broken_reference' | 'schema_drift' | 'api_drift';
+    description: string;
     sourceFile: string;
     targetFile?: string;
-    message: string;
+    sourceNodeId: string;
+    targetNodeId?: string;
+    severity: ChangeSeverity;
     autoFixable: boolean;
+    suggestedFix?: string;
 }
 
 export interface SyncReport {
@@ -470,6 +551,6 @@ export interface SyncReport {
     timestamp: number;
     issues: SyncIssue[];
     autoFixed: SyncIssue[];
-    requiresManual: SyncIssue[];
+    requiresManualFix: SyncIssue[];
     summary: string;
 }
