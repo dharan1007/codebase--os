@@ -43,16 +43,16 @@ export class SessionMemory {
 
             for (const row of rows) {
                 const relPath = path.relative(this.rootDir, row.file_path).replace(/\\/g, '/');
-                const session = sessionMap.get(row.session_id) ?? {
-                    sessionId: row.session_id,
+                const session: PastSession = sessionMap.get(row.session_id) ?? {
+                    sessionId: String(row.session_id),
                     filesModified: [],
                     changeCount: 0,
-                    appliedAt: row.applied_at,
+                    appliedAt: Number(row.applied_at) || 0,
                 };
                 if (!session.filesModified.includes(relPath)) session.filesModified.push(relPath);
                 session.changeCount++;
-                session.appliedAt = Math.max(session.appliedAt, row.applied_at);
-                sessionMap.set(row.session_id, session);
+                session.appliedAt = Math.max(session.appliedAt, Number(row.applied_at) || 0);
+                sessionMap.set(session.sessionId, session);
                 fileFreq.set(relPath, (fileFreq.get(relPath) ?? 0) + 1);
             }
 
@@ -67,9 +67,6 @@ export class SessionMemory {
 
             let recurringFailureFiles: ProjectMemory['recurringFailureFiles'] = [];
             try {
-                // failure_snapshots uses camelCase `filePath` and stores a
-                // frequency counter; the previous query targeted a nonexistent
-                // failure_log table and silently erased this memory signal.
                 const failures = this.db.prepare(`
                     SELECT
                         fs.filePath AS file_path,
