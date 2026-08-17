@@ -23,7 +23,7 @@ const ALL_ALLOWED_BINS = new Set([
     'node', 'npx', 'npm', 'yarn', 'pnpm', 'bun', 'ts-node', 'tsc',
     'python', 'python3', 'pip', 'pip3', 'pytest',
     'go', 'cargo', 'rustc',
-    'javac', 'java', 'mvn', 'gradle',
+    'javac', 'java', 'mvn', 'mvnw', 'gradle', 'gradlew',
     'dotnet', 'swift', 'flutter', 'dart',
     'echo', 'ls', 'cat', 'head', 'tail', 'grep', 'find', 'wc', 'pwd',
     'jest', 'vitest', 'mocha',
@@ -54,36 +54,35 @@ export class SandboxManager {
         const validation = this.validateCommand(command);
         if (!validation.valid) {
             logger.warn('Sandbox: command blocked', { reason: validation.reason, command });
-            return {
-                success: false,
-                output: '',
-                error: `[SANDBOX BLOCKED] ${validation.reason}`,
-            };
+            return { success: false, output: '', error: `[SANDBOX BLOCKED] ${validation.reason}` };
         }
 
-        if (await this.isDockerAvailable()) {
-            return this.executeInDocker(command, validation.bin!, requireNetwork, onOutput);
-        }
+        try {
+            if (await this.isDockerAvailable()) {
+                return await this.executeInDocker(command, validation.bin!, requireNetwork, onOutput);
+            }
 
-        if (process.env['COS_ALLOW_NATIVE_SANDBOX'] !== '1') {
-            return {
-                success: false,
-                output: '',
-                error:
-                    '[SANDBOX BLOCKED] Docker is unavailable. Native execution is disabled by default because ' +
-                    'project scripts are arbitrary host code. Install/start Docker or explicitly set ' +
-                    'COS_ALLOW_NATIVE_SANDBOX=1 to accept reduced isolation.',
-            };
-        }
+            if (process.env['COS_ALLOW_NATIVE_SANDBOX'] !== '1') {
+                return {
+                    success: false,
+                    output: '',
+                    error:
+                        '[SANDBOX BLOCKED] Docker is unavailable. Native execution is disabled by default because ' +
+                        'project scripts are arbitrary host code. Install/start Docker or explicitly set ' +
+                        'COS_ALLOW_NATIVE_SANDBOX=1 to accept reduced isolation.',
+                };
+            }
 
-        return this.executeNatively(command, onOutput);
+            return await this.executeNatively(command, onOutput);
+        } catch (err) {
+            return { success: false, output: '', error: `[SANDBOX ERROR] ${String(err)}` };
+        }
     }
 
     private validateCommand(command: string): { valid: boolean; reason?: string; bin?: string } {
         const trimmed = command.trim();
         if (!trimmed) return { valid: false, reason: 'Empty command' };
         if (trimmed.length > 8192) return { valid: false, reason: 'Command exceeds the 8KB safety limit' };
-
         if (FORBIDDEN_SHELL_METACHARACTERS.test(trimmed)) {
             return {
                 valid: false,
@@ -95,10 +94,7 @@ export class SandboxManager {
         const rawBin = tokens[0]!;
         const bin = path.basename(rawBin).toLowerCase();
         if (!ALL_ALLOWED_BINS.has(bin)) {
-            return {
-                valid: false,
-                reason: `Binary "${rawBin}" is not in the execution allowlist.`,
-            };
+            return { valid: false, reason: `Binary "${rawBin}" is not in the execution allowlist.` };
         }
 
         for (const rawArg of tokens.slice(1)) {
@@ -153,18 +149,12 @@ export class SandboxManager {
                 '--workdir=/workspace',
             ];
 
-            // Hide repository metadata and Codebase OS state from commands.
             for (const directory of ['.git', '.cos']) {
                 if (fs.existsSync(path.join(this.rootDir, directory))) {
-                    dockerArgs.push(
-                        '--mount',
-                        `type=bind,source=${emptyDir},target=/source/${directory},readonly`,
-                    );
+                    dockerArgs.push('--mount', `type=bind,source=${emptyDir},target=/source/${directory},readonly`);
                 }
             }
 
-            // Mask credential-shaped files before the read-only source tree is
-            // copied into the disposable writable workspace.
             const sensitiveFiles = fg.sync(SECRET_GLOBS, {
                 cwd: this.rootDir,
                 dot: true,
@@ -179,13 +169,22 @@ export class SandboxManager {
                     '**/.env.sample',
                     '**/.env.template',
                 ],
-            }).slice(0, 256);
+            });
+            if (sensitiveFiles.length > 256) {
+                throw new Error(
+                    `Refusing sandbox launch: ${sensitiveFiles.length} credential-shaped files exceed the safe masking limit.`,
+                );
+            }
             for (const relative of sensitiveFiles) {
-                const containerTarget = `/source/${relative.replace(/\\/g, '/')}`;
                 dockerArgs.push(
                     '--mount',
-                    `type=bind,source=${emptyFile},target=${containerTarget},readonly`,
+                    `type=bind,source=${emptyFile},target=/source/${relative.replace(/\\/g, '/')},readonly`,
                 );
+            }
+
+            for (const name of this.explicitEnvironmentAllowlist()) {
+                const value = process.env[name];
+                if (value !== undefined) dockerArgs.push('--env', `${name}=${value}`);
             }
 
             const effectiveCommand = this.wrapPackageManagerCommand(command, bin);
@@ -209,13 +208,19 @@ export class SandboxManager {
     ): Promise<SandboxResult> {
         logger.warn('Sandbox: native execution explicitly enabled; isolation is reduced.');
         const tokens = command.trim().split(/\s+/);
-        const bin = tokens[0]!;
-        const args = tokens.slice(1);
-
-        return this.spawnWithOutput([bin, ...args], onOutput, {
+        return this.spawnWithOutput([tokens[0]!, ...tokens.slice(1)], onOutput, {
             cwd: this.rootDir,
             env: this.buildSanitizedEnvironment(),
         });
+    }
+
+    private explicitEnvironmentAllowlist(): string[] {
+        return [...new Set(
+            (process.env['COS_SANDBOX_ENV_ALLOW'] || '')
+                .split(',')
+                .map(name => name.trim())
+                .filter(Boolean),
+        )];
     }
 
     private buildSanitizedEnvironment(): NodeJS.ProcessEnv {
@@ -223,11 +228,8 @@ export class SandboxManager {
             'PATH', 'Path', 'HOME', 'USERPROFILE', 'TMPDIR', 'TMP', 'TEMP',
             'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT',
             'LANG', 'LC_ALL', 'TERM', 'CI', 'NODE_ENV', 'NO_COLOR', 'FORCE_COLOR',
+            ...this.explicitEnvironmentAllowlist(),
         ]);
-        for (const name of (process.env['COS_SANDBOX_ENV_ALLOW'] || '').split(',')) {
-            if (name.trim()) safeNames.add(name.trim());
-        }
-
         const env: NodeJS.ProcessEnv = {};
         for (const name of safeNames) {
             const value = process.env[name];
@@ -240,43 +242,36 @@ export class SandboxManager {
         const tokens = command.trim().split(/\s+/);
         const subcommand = (tokens[1] || '').toLowerCase();
         const second = (tokens[2] || '').toLowerCase();
-
         if (['npm', 'pnpm', 'yarn', 'bun'].includes(bin)) {
             return ['install', 'i', 'add', 'update', 'upgrade', 'ci'].includes(subcommand);
         }
-        if (['pip', 'pip3'].includes(bin)) {
-            return ['install', 'download', 'wheel'].includes(subcommand);
-        }
-        if (bin === 'go') {
-            return subcommand === 'get' || (subcommand === 'mod' && ['download', 'tidy'].includes(second));
-        }
-        if (bin === 'cargo') {
-            return ['fetch', 'install', 'update', 'search'].includes(subcommand);
-        }
+        if (['pip', 'pip3'].includes(bin)) return ['install', 'download', 'wheel'].includes(subcommand);
+        if (bin === 'go') return subcommand === 'get' || (subcommand === 'mod' && ['download', 'tidy'].includes(second));
+        if (bin === 'cargo') return ['fetch', 'install', 'update', 'search'].includes(subcommand);
         return false;
     }
 
     private imageForCommand(bin: string): string {
-        const overrides: Record<string, string | undefined> = {
-            node: process.env['COS_SANDBOX_NODE_IMAGE'],
-            python: process.env['COS_SANDBOX_PYTHON_IMAGE'],
-            go: process.env['COS_SANDBOX_GO_IMAGE'],
-            rust: process.env['COS_SANDBOX_RUST_IMAGE'],
-            java: process.env['COS_SANDBOX_JAVA_IMAGE'],
-            dotnet: process.env['COS_SANDBOX_DOTNET_IMAGE'],
-        };
-
         if (['python', 'python3', 'pip', 'pip3', 'pytest'].includes(bin)) {
-            return overrides.python || 'python:3.12-slim';
+            return process.env['COS_SANDBOX_PYTHON_IMAGE'] || 'python:3.12-slim';
         }
-        if (bin === 'go') return overrides.go || 'golang:1.24-bookworm';
-        if (['cargo', 'rustc'].includes(bin)) return overrides.rust || 'rust:1-bookworm';
-        if (bin === 'mvn') return process.env['COS_SANDBOX_MAVEN_IMAGE'] || 'maven:3.9-eclipse-temurin-21';
-        if (bin === 'gradle') return process.env['COS_SANDBOX_GRADLE_IMAGE'] || 'gradle:8-jdk21';
-        if (['java', 'javac'].includes(bin)) return overrides.java || 'eclipse-temurin:21-jdk';
-        if (bin === 'dotnet') return overrides.dotnet || 'mcr.microsoft.com/dotnet/sdk:8.0';
+        if (bin === 'go') return process.env['COS_SANDBOX_GO_IMAGE'] || 'golang:1.24-bookworm';
+        if (['cargo', 'rustc'].includes(bin)) return process.env['COS_SANDBOX_RUST_IMAGE'] || 'rust:1-bookworm';
+        if (['mvn', 'mvnw'].includes(bin)) return process.env['COS_SANDBOX_MAVEN_IMAGE'] || 'maven:3.9-eclipse-temurin-21';
+        if (['gradle', 'gradlew'].includes(bin)) return process.env['COS_SANDBOX_GRADLE_IMAGE'] || 'gradle:8-jdk21';
+        if (['java', 'javac'].includes(bin)) return process.env['COS_SANDBOX_JAVA_IMAGE'] || 'eclipse-temurin:21-jdk';
+        if (bin === 'dotnet') return process.env['COS_SANDBOX_DOTNET_IMAGE'] || 'mcr.microsoft.com/dotnet/sdk:8.0';
         if (bin === 'bun') return process.env['COS_SANDBOX_BUN_IMAGE'] || 'oven/bun:1';
-        return overrides.node || 'node:20-bookworm-slim';
+        if (bin === 'swift') return process.env['COS_SANDBOX_SWIFT_IMAGE'] || 'swift:6.0-bookworm';
+        if (bin === 'dart') return process.env['COS_SANDBOX_DART_IMAGE'] || 'dart:stable';
+        if (bin === 'flutter') {
+            const image = process.env['COS_SANDBOX_FLUTTER_IMAGE'];
+            if (!image) {
+                throw new Error('Flutter verification requires COS_SANDBOX_FLUTTER_IMAGE; no unverified third-party default is used.');
+            }
+            return image;
+        }
+        return process.env['COS_SANDBOX_NODE_IMAGE'] || 'node:20-bookworm-slim';
     }
 
     private wrapPackageManagerCommand(command: string, bin: string): string {
@@ -319,13 +314,11 @@ export class SandboxManager {
                     proc.kill('SIGKILL');
                     return;
                 }
-
                 const slice = chunk.byteLength > remaining ? chunk.subarray(0, remaining) : chunk;
                 const text = slice.toString('utf8');
                 capturedBytes += slice.byteLength;
                 target.push(text);
                 onOutput?.(text);
-
                 if (chunk.byteLength > remaining) {
                     outputLimited = true;
                     proc.kill('SIGKILL');
@@ -339,26 +332,14 @@ export class SandboxManager {
                 clearTimeout(timeout);
                 const output = outputChunks.join('');
                 const errorOutput = errorChunks.join('');
-
                 if (timedOut) {
-                    resolve({
-                        success: false,
-                        output,
-                        error: `Command timed out after ${timeoutMs}ms.`,
-                        exitCode: -1,
-                    });
+                    resolve({ success: false, output, error: `Command timed out after ${timeoutMs}ms.`, exitCode: -1 });
                     return;
                 }
                 if (outputLimited) {
-                    resolve({
-                        success: false,
-                        output,
-                        error: `Command exceeded the ${maxOutputBytes}-byte output safety limit.`,
-                        exitCode: -1,
-                    });
+                    resolve({ success: false, output, error: `Command exceeded the ${maxOutputBytes}-byte output safety limit.`, exitCode: -1 });
                     return;
                 }
-
                 resolve({
                     success: code === 0,
                     output,
