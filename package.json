@@ -1,25 +1,42 @@
 {
   "name": "codebase-os",
   "version": "1.0.0",
-  "description": "Codebase Operating System — A foundational layer for intelligent software development",
+  "description": "Codebase Operating System — a verified software-change runtime for AI engineering",
   "author": "Dharantej Reddy Poduvu <dharan.poduvu@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dharan1007/codebase--os.git"
+  },
+  "homepage": "https://github.com/dharan1007/codebase--os#readme",
+  "bugs": {
+    "url": "https://github.com/dharan1007/codebase--os/issues"
+  },
   "keywords": [
     "ai",
     "agent",
     "automation",
     "codebase",
-    "engineering"
+    "engineering",
+    "verification"
   ],
   "main": "dist/cli/index.js",
   "bin": {
     "cos": "dist/cli/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
   "scripts": {
     "build": "tsc --project tsconfig.json && node scripts/copy-ui.js",
     "dev": "ts-node --project tsconfig.json src/cli/index.ts",
     "start": "node dist/cli/index.js",
     "typecheck": "tsc --project tsconfig.json --noEmit",
-    "test": "jest --passWithNoTests"
+    "test": "node --test tests/*.test.cjs",
+    "verify": "npm run typecheck && npm run build && npm test",
+    "prepublishOnly": "npm run verify"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.9",
@@ -68,6 +85,6 @@
     "typescript": "^5.3.3"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }
