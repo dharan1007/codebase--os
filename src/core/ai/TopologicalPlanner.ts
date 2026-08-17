@@ -1,5 +1,5 @@
 import type { RelationshipGraph } from '../graph/RelationshipGraph.js';
-import type { GraphNode } from '../../types/index.js';
+import type { EdgeKind, GraphEdge } from '../../types/index.js';
 import path from 'path';
 
 export interface PlannedFile {
@@ -25,34 +25,61 @@ export interface BlastRadiusReport {
 }
 
 /**
- * TopologicalPlanner — the core differentiator of Codebase OS.
+ * Relationship kinds that express a dependency from source -> target.
  *
- * Codex, Claude Code, and Cursor make file changes in arbitrary order.
- * This engine computes the mathematically correct execution order using
- * Kahn's topological sort over the persistent relationship graph.
+ * Deliberately excluded:
+ * - provides / exports: containment or publication, not execution dependencies
+ * - tests: a test is evidence for a target, not a prerequisite to edit it
  *
- * Before the agent writes a single line:
- *  1. Identify the root files involved in the task
- *  2. BFS backward  → find all dependents (will break if we don't update them)
- *  3. BFS forward   → find all dependencies (must be changed first)
- *  4. Kahn's sort   → execution order where leaf files (most depended-on) go first
- *  5. Return a blast radius report with cross-layer warnings and cycle detection
+ * Keeping this explicit prevents containment/test edges from corrupting
+ * blast-radius traversal and topological ordering.
+ */
+const DEPENDENCY_EDGE_KINDS: ReadonlySet<EdgeKind> = new Set<EdgeKind>([
+    'imports',
+    'calls',
+    'extends',
+    'implements',
+    'uses_type',
+    'reads_from',
+    'writes_to',
+    'depends_on',
+    'references',
+    'api_uses',
+    'db_uses',
+    'renders',
+]);
+
+interface AffectedInfo {
+    depth: number;
+    reason: string;
+}
+
+/**
+ * TopologicalPlanner computes a dependency-first file execution plan.
+ *
+ * Graph convention:
+ *   source -> target means "source depends on target".
+ *
+ * For execution, that relationship is inverted into:
+ *   target -> source
+ *
+ * before Kahn's algorithm is applied. This guarantees that a dependency is
+ * emitted before a consumer whenever the dependency subgraph is acyclic.
  */
 export class TopologicalPlanner {
     constructor(private graph: RelationshipGraph, private rootDir: string) {}
 
-    /**
-     * Given a natural-language task string, find the most relevant root files
-     * and compute a topologically sorted execution plan.
-     */
-    planFromTask(task: string): BlastRadiusReport {
+    planFromTask(task: string, maxDepthOverride?: number): BlastRadiusReport {
         const keywords = task
             .toLowerCase()
             .replace(/[^a-z0-9\s]/g, ' ')
             .split(/\s+/)
-            .filter(w => w.length > 3 && !['this', 'that', 'with', 'from', 'make', 'change', 'update', 'refactor', 'fix', 'add', 'remove'].includes(w));
+            .filter(w => w.length > 3 && ![
+                'this', 'that', 'with', 'from', 'make', 'change', 'update',
+                'refactor', 'fix', 'add', 'remove', 'into', 'using', 'should',
+            ].includes(w));
 
-        const candidateNodes = Array.from(this.graph.nodes.values())
+        const candidateFiles = Array.from(this.graph.nodes.values())
             .filter(n => n.kind === 'file' || n.kind === 'function' || n.kind === 'class' || n.kind === 'interface')
             .map(n => {
                 let score = 0;
@@ -63,244 +90,390 @@ export class TopologicalPlanner {
                     else if (name.includes(kw)) score += 5;
                     if (fp.includes(kw)) score += 3;
                 }
-                return { node: n, score };
+                return { filePath: n.filePath, score };
             })
             .filter(x => x.score > 0)
-            .sort((a, b) => b.score - a.score)
-            .slice(0, 5)
-            .map(x => x.node.filePath);
+            .sort((a, b) => b.score - a.score || a.filePath.localeCompare(b.filePath));
 
-        const uniqueRoots = [...new Set(candidateNodes)];
-        if (uniqueRoots.length === 0) {
-            return {
-                rootFiles: [],
-                affectedFiles: [],
-                layerBreakdown: {},
-                crossLayerWarnings: [],
-                cycles: [],
-                totalFiles: 0,
-                executionPlan: [],
-                estimatedComplexity: 'low',
-            };
+        const uniqueRoots: string[] = [];
+        const seen = new Set<string>();
+        for (const candidate of candidateFiles) {
+            if (seen.has(candidate.filePath)) continue;
+            seen.add(candidate.filePath);
+            uniqueRoots.push(candidate.filePath);
+            if (uniqueRoots.length >= 5) break;
         }
 
-        return this.planFromFiles(uniqueRoots);
+        if (uniqueRoots.length === 0) return this.emptyReport([]);
+        return this.planFromFiles(uniqueRoots, maxDepthOverride);
     }
 
-    /**
-     * Given specific file paths, compute the full blast radius and sorted plan.
-     */
-    planFromFiles(rootFilePaths: string[]): BlastRadiusReport {
-        // Collect root node IDs
+    planFromFiles(rootFilePaths: string[], maxDepthOverride?: number): BlastRadiusReport {
         const rootNodeIds = new Set<string>();
         const rootFileSet = new Set<string>();
 
-        for (const fp of rootFilePaths) {
-            const abs = path.isAbsolute(fp) ? fp : path.resolve(this.rootDir, fp);
-            rootFileSet.add(abs);
-            const nodes = this.graph.getNodesByFile(abs);
-            for (const n of nodes) rootNodeIds.add(n.id);
+        for (const filePath of rootFilePaths) {
+            const absolute = path.isAbsolute(filePath)
+                ? path.resolve(filePath)
+                : path.resolve(this.rootDir, filePath);
+            rootFileSet.add(absolute);
+            for (const node of this.graph.getNodesByFile(absolute)) {
+                rootNodeIds.add(node.id);
+            }
         }
 
         if (rootNodeIds.size === 0) {
             return {
-                rootFiles: rootFilePaths,
-                affectedFiles: [],
-                layerBreakdown: {},
-                crossLayerWarnings: [],
-                cycles: [],
-                totalFiles: 0,
+                ...this.emptyReport(rootFilePaths),
                 executionPlan: rootFilePaths,
-                estimatedComplexity: 'low',
             };
         }
 
-        // ADAPTIVE DEPTH: compute the BFS ceiling from the centrality of root nodes.
-        // A hub node (many dependents) must be traversed deeply — a leaf node is shallow.
-        //
-        // Formula: maxDepth = clamp(log2(maxDependents + 2) * 3, 4, 20)
-        // maxDependents=0   → depth 4  (leaf: shallow scan)
-        // maxDependents=10  → depth 10 (moderate hub)
-        // maxDependents=100 → depth 15 (major hub)
-        // maxDependents=500 → depth 20 (central infrastructure, full traversal)
         const maxDependents = Math.max(
-            ...Array.from(rootNodeIds).map(id =>
-                (this.graph.reverseAdjacency.get(id) ?? new Set()).size
-            ),
-            0
+            ...Array.from(rootNodeIds, id => this.getDependentNodeIds(id).length),
+            0,
         );
-        const adaptiveDepth = Math.min(20, Math.max(4, Math.round(Math.log2(maxDependents + 2) * 3)));
+        const adaptiveDepth = this.resolveDepth(maxDependents, maxDepthOverride);
 
-        const affectedIds = new Map<string, { depth: number; reason: string }>();
-
-        // Seed with roots
+        const affectedIds = new Map<string, AffectedInfo>();
         for (const id of rootNodeIds) {
             affectedIds.set(id, { depth: 0, reason: 'root' });
         }
 
-        // Forward BFS: anything the root depends ON (we may need to update these first)
-        const fwdQueue: Array<{ id: string; depth: number }> = [...rootNodeIds].map(id => ({ id, depth: 1 }));
-        const fwdVisited = new Set<string>(rootNodeIds);
-        while (fwdQueue.length > 0) {
-            const { id, depth } = fwdQueue.shift()!;
-            if (depth > adaptiveDepth) continue;
-            for (const dep of (this.graph.adjacency.get(id) ?? new Set())) {
-                if (!fwdVisited.has(dep)) {
-                    fwdVisited.add(dep);
-                    affectedIds.set(dep, { depth, reason: `dependency (depth ${depth}/${adaptiveDepth})` });
-                    fwdQueue.push({ id: dep, depth: depth + 1 });
-                }
-            }
-        }
+        this.walkDependencies(rootNodeIds, adaptiveDepth, affectedIds);
+        this.walkDependents(rootNodeIds, adaptiveDepth, affectedIds);
 
-        // Backward BFS: anything that IMPORTS the root (will break without updates)
-        const bwdQueue: Array<{ id: string; depth: number }> = [...rootNodeIds].map(id => ({ id, depth: 1 }));
-        const bwdVisited = new Set<string>(rootNodeIds);
-        while (bwdQueue.length > 0) {
-            const { id, depth } = bwdQueue.shift()!;
-            if (depth > adaptiveDepth) continue;
-            for (const dep of (this.graph.reverseAdjacency.get(id) ?? new Set())) {
-                if (!bwdVisited.has(dep)) {
-                    bwdVisited.add(dep);
-                    if (!affectedIds.has(dep)) {
-                        affectedIds.set(dep, { depth, reason: `dependent (will break at depth ${depth}/${adaptiveDepth})` });
-                    }
-                    bwdQueue.push({ id: dep, depth: depth + 1 });
-                }
-            }
-        }
+        const fileInfo = this.collapseAffectedNodesToFiles(affectedIds, rootFileSet);
+        const affectedFileSet = new Set(fileInfo.keys());
+        const dependencyMap = this.buildFileDependencyMap(affectedFileSet);
+        const dependentMap = this.reverseFileDependencyMap(dependencyMap);
+        const { order: fileOrder, cyclicFiles } = this.topologicallySortFiles(dependencyMap);
 
-        // Topological sort via Kahn's algorithm
-        const topoOrder = this.kahnsSort([...affectedIds.keys()]);
+        const files: PlannedFile[] = [];
+        let executionOrder = 1;
+        for (const filePath of fileOrder) {
+            const info = fileInfo.get(filePath);
+            if (!info) continue;
+            const representative = this.graph.getNodesByFile(filePath)[0];
+            if (!representative) continue;
 
-        // Deduplicate by file, accumulate into PlannedFile list
-        const fileMap = new Map<string, PlannedFile>();
-        let order = 1;
-        for (const nodeId of topoOrder) {
-            const node = this.graph.getNode(nodeId);
-            if (!node || fileMap.has(node.filePath)) continue;
-            const rel = path.relative(this.rootDir, node.filePath).replace(/\\/g, '/');
-            const info = affectedIds.get(nodeId)!;
-            fileMap.set(node.filePath, {
-                filePath: node.filePath,
-                relativePath: rel,
-                layer: node.layer,
-                dependentCount: this.graph.reverseAdjacency.get(nodeId)?.size ?? 0,
-                dependencyCount: this.graph.adjacency.get(nodeId)?.size ?? 0,
-                executionOrder: order++,
+            files.push({
+                filePath,
+                relativePath: path.relative(this.rootDir, filePath).replace(/\\/g, '/'),
+                layer: representative.layer,
+                dependentCount: dependentMap.get(filePath)?.size ?? 0,
+                dependencyCount: dependencyMap.get(filePath)?.size ?? 0,
+                executionOrder: executionOrder++,
                 reason: info.reason,
-                isRoot: rootFileSet.has(node.filePath),
+                isRoot: rootFileSet.has(filePath),
             });
         }
 
-        const files = [...fileMap.values()];
-
-        // Layer breakdown
         const layerBreakdown: Record<string, number> = {};
-        for (const f of files) {
-            layerBreakdown[f.layer] = (layerBreakdown[f.layer] ?? 0) + 1;
+        for (const file of files) {
+            layerBreakdown[file.layer] = (layerBreakdown[file.layer] ?? 0) + 1;
         }
 
-        // Cross-layer warnings — unexpected layer boundary crossings
-        const crossLayerSet = new Set<string>();
-        for (const edge of this.graph.edges.values()) {
-            if (!affectedIds.has(edge.sourceId) || !affectedIds.has(edge.targetId)) continue;
-            const src = this.graph.getNode(edge.sourceId);
-            const tgt = this.graph.getNode(edge.targetId);
-            if (!src || !tgt || src.layer === tgt.layer) continue;
-            crossLayerSet.add(`${src.name} (${src.layer}) -> ${tgt.name} (${tgt.layer})`);
-        }
-
-        // Cycle detection
-        const cycles = this.detectCycles([...affectedIds.keys()]);
-
-        const complexity = files.length >= 20 ? 'high' : files.length >= 8 ? 'medium' : 'low';
+        const crossLayerWarnings = this.buildCrossLayerWarnings(affectedFileSet);
+        const cycles = this.describeCycles(dependencyMap, cyclicFiles);
+        const complexity: BlastRadiusReport['estimatedComplexity'] =
+            files.length >= 20 ? 'high' : files.length >= 8 ? 'medium' : 'low';
 
         return {
             rootFiles: rootFilePaths,
             affectedFiles: files,
             layerBreakdown,
-            crossLayerWarnings: [...crossLayerSet].slice(0, 10),
-            cycles: cycles.slice(0, 5),
+            crossLayerWarnings,
+            cycles,
             totalFiles: files.length,
             executionPlan: files.map(f => f.relativePath),
             estimatedComplexity: complexity,
         };
     }
 
-    /**
-     * Kahn's algorithm — O(V+E) topological sort.
-     * Produces deterministic ordering where nodes with zero in-degree come first
-     * (i.e., foundational files that nothing imports — change these first).
-     */
-    private kahnsSort(nodeIds: string[]): string[] {
-        const idSet = new Set(nodeIds);
-        const inDegree = new Map<string, number>(nodeIds.map(id => [id, 0]));
-        const adj = new Map<string, string[]>(nodeIds.map(id => [id, []]));
+    private walkDependencies(
+        roots: Set<string>,
+        maxDepth: number,
+        affected: Map<string, AffectedInfo>,
+    ): void {
+        const queue = Array.from(roots, id => ({ id, depth: 1 }));
+        const visited = new Set<string>(roots);
 
-        for (const id of nodeIds) {
-            for (const dep of (this.graph.adjacency.get(id) ?? new Set())) {
-                if (idSet.has(dep)) {
-                    adj.get(id)!.push(dep);
-                    inDegree.set(dep, (inDegree.get(dep) ?? 0) + 1);
+        while (queue.length > 0) {
+            const current = queue.shift()!;
+            if (current.depth > maxDepth) continue;
+
+            for (const dependencyId of this.getDependencyNodeIds(current.id)) {
+                if (visited.has(dependencyId)) continue;
+                visited.add(dependencyId);
+                this.setAffectedIfBetter(
+                    affected,
+                    dependencyId,
+                    current.depth,
+                    `dependency (depth ${current.depth}/${maxDepth})`,
+                );
+                queue.push({ id: dependencyId, depth: current.depth + 1 });
+            }
+        }
+    }
+
+    private walkDependents(
+        roots: Set<string>,
+        maxDepth: number,
+        affected: Map<string, AffectedInfo>,
+    ): void {
+        const queue = Array.from(roots, id => ({ id, depth: 1 }));
+        const visited = new Set<string>(roots);
+
+        while (queue.length > 0) {
+            const current = queue.shift()!;
+            if (current.depth > maxDepth) continue;
+
+            for (const dependentId of this.getDependentNodeIds(current.id)) {
+                if (visited.has(dependentId)) continue;
+                visited.add(dependentId);
+                this.setAffectedIfBetter(
+                    affected,
+                    dependentId,
+                    current.depth,
+                    `dependent (depth ${current.depth}/${maxDepth})`,
+                );
+                queue.push({ id: dependentId, depth: current.depth + 1 });
+            }
+        }
+    }
+
+    private setAffectedIfBetter(
+        affected: Map<string, AffectedInfo>,
+        nodeId: string,
+        depth: number,
+        reason: string,
+    ): void {
+        const existing = affected.get(nodeId);
+        if (!existing || depth < existing.depth) {
+            affected.set(nodeId, { depth, reason });
+        }
+    }
+
+    private collapseAffectedNodesToFiles(
+        affectedIds: Map<string, AffectedInfo>,
+        rootFileSet: Set<string>,
+    ): Map<string, AffectedInfo> {
+        const files = new Map<string, AffectedInfo>();
+
+        for (const [nodeId, info] of affectedIds) {
+            const node = this.graph.getNode(nodeId);
+            if (!node) continue;
+            const absolute = path.resolve(node.filePath);
+            const normalizedInfo = rootFileSet.has(absolute)
+                ? { depth: 0, reason: 'root' }
+                : info;
+            const existing = files.get(absolute);
+            if (!existing || normalizedInfo.depth < existing.depth) {
+                files.set(absolute, normalizedInfo);
+            }
+        }
+
+        return files;
+    }
+
+    /**
+     * Returns file -> dependencies. Each source file depends on every target
+     * file reached through a dependency-bearing edge.
+     */
+    private buildFileDependencyMap(fileSet: Set<string>): Map<string, Set<string>> {
+        const dependencyMap = new Map<string, Set<string>>();
+        for (const filePath of fileSet) dependencyMap.set(filePath, new Set());
+
+        for (const edge of this.graph.edges.values()) {
+            if (!this.isDependencyEdge(edge)) continue;
+            const source = this.graph.getNode(edge.sourceId);
+            const target = this.graph.getNode(edge.targetId);
+            if (!source || !target) continue;
+
+            const sourceFile = path.resolve(source.filePath);
+            const targetFile = path.resolve(target.filePath);
+            if (sourceFile === targetFile) continue;
+            if (!fileSet.has(sourceFile) || !fileSet.has(targetFile)) continue;
+
+            dependencyMap.get(sourceFile)!.add(targetFile);
+        }
+
+        return dependencyMap;
+    }
+
+    private reverseFileDependencyMap(
+        dependencyMap: Map<string, Set<string>>,
+    ): Map<string, Set<string>> {
+        const reverse = new Map<string, Set<string>>();
+        for (const filePath of dependencyMap.keys()) reverse.set(filePath, new Set());
+
+        for (const [consumer, dependencies] of dependencyMap) {
+            for (const dependency of dependencies) {
+                reverse.get(dependency)?.add(consumer);
+            }
+        }
+        return reverse;
+    }
+
+    /**
+     * Kahn sort on file dependencies.
+     *
+     * dependencyMap is consumer -> dependency, so the scheduling graph is
+     * inverted to dependency -> consumer before in-degrees are computed.
+     */
+    private topologicallySortFiles(
+        dependencyMap: Map<string, Set<string>>,
+    ): { order: string[]; cyclicFiles: Set<string> } {
+        const inDegree = new Map<string, number>();
+        const dependents = new Map<string, Set<string>>();
+
+        for (const filePath of dependencyMap.keys()) {
+            inDegree.set(filePath, 0);
+            dependents.set(filePath, new Set());
+        }
+
+        for (const [consumer, dependencies] of dependencyMap) {
+            for (const dependency of dependencies) {
+                if (!dependencyMap.has(dependency)) continue;
+                dependents.get(dependency)!.add(consumer);
+                inDegree.set(consumer, (inDegree.get(consumer) ?? 0) + 1);
+            }
+        }
+
+        const queue = Array.from(inDegree.entries())
+            .filter(([, degree]) => degree === 0)
+            .map(([filePath]) => filePath)
+            .sort();
+        const order: string[] = [];
+
+        while (queue.length > 0) {
+            const current = queue.shift()!;
+            order.push(current);
+
+            const nextDependents = Array.from(dependents.get(current) ?? []).sort();
+            for (const dependent of nextDependents) {
+                const nextDegree = (inDegree.get(dependent) ?? 1) - 1;
+                inDegree.set(dependent, nextDegree);
+                if (nextDegree === 0) {
+                    queue.push(dependent);
+                    queue.sort();
                 }
             }
         }
 
-        const queue: string[] = [];
-        for (const [id, deg] of inDegree) {
-            if (deg === 0) queue.push(id);
+        const cyclicFiles = new Set<string>();
+        for (const [filePath, degree] of inDegree) {
+            if (degree > 0) cyclicFiles.add(filePath);
         }
 
-        const result: string[] = [];
-        while (queue.length > 0) {
-            const current = queue.shift()!;
-            result.push(current);
-            for (const neighbor of (adj.get(current) ?? [])) {
-                const newDeg = (inDegree.get(neighbor) ?? 1) - 1;
-                inDegree.set(neighbor, newDeg);
-                if (newDeg === 0) queue.push(neighbor);
-            }
+        // Cycles do not have a valid total topological order. Append the affected
+        // members deterministically and surface them in `cycles` for review.
+        for (const filePath of Array.from(cyclicFiles).sort()) {
+            if (!order.includes(filePath)) order.push(filePath);
         }
 
-        // Append cycle participants (couldn't be sorted)
-        for (const id of nodeIds) {
-            if (!result.includes(id)) result.push(id);
-        }
-
-        return result;
+        return { order, cyclicFiles };
     }
 
-    private detectCycles(nodeIds: string[]): string[] {
-        const idSet = new Set(nodeIds);
+    private describeCycles(
+        dependencyMap: Map<string, Set<string>>,
+        cyclicFiles: Set<string>,
+    ): string[] {
+        if (cyclicFiles.size === 0) return [];
+
         const cycles: string[] = [];
         const visited = new Set<string>();
         const stack = new Set<string>();
-        const pathArr: string[] = [];
+        const chain: string[] = [];
 
-        const dfs = (id: string): void => {
+        const dfs = (filePath: string): void => {
             if (cycles.length >= 5) return;
-            visited.add(id);
-            stack.add(id);
-            pathArr.push(id);
-            for (const neighbor of (this.graph.adjacency.get(id) ?? new Set())) {
-                if (!idSet.has(neighbor)) continue;
-                if (!visited.has(neighbor)) dfs(neighbor);
-                else if (stack.has(neighbor)) {
-                    const start = pathArr.indexOf(neighbor);
-                    if (start !== -1) {
-                        const names = pathArr.slice(start).map(nid => this.graph.getNode(nid)?.name ?? nid);
-                        cycles.push(names.join(' -> '));
+            visited.add(filePath);
+            stack.add(filePath);
+            chain.push(filePath);
+
+            for (const dependency of dependencyMap.get(filePath) ?? []) {
+                if (!cyclicFiles.has(dependency)) continue;
+                if (!visited.has(dependency)) {
+                    dfs(dependency);
+                } else if (stack.has(dependency)) {
+                    const index = chain.indexOf(dependency);
+                    if (index >= 0) {
+                        const members = chain.slice(index)
+                            .concat(dependency)
+                            .map(p => path.relative(this.rootDir, p).replace(/\\/g, '/'));
+                        const text = members.join(' -> ');
+                        if (!cycles.includes(text)) cycles.push(text);
                     }
                 }
             }
-            pathArr.pop();
-            stack.delete(id);
+
+            chain.pop();
+            stack.delete(filePath);
         };
 
-        for (const id of nodeIds) {
-            if (!visited.has(id)) dfs(id);
+        for (const filePath of Array.from(cyclicFiles).sort()) {
+            if (!visited.has(filePath)) dfs(filePath);
         }
+
         return cycles;
+    }
+
+    private buildCrossLayerWarnings(fileSet: Set<string>): string[] {
+        const warnings = new Set<string>();
+
+        for (const edge of this.graph.edges.values()) {
+            if (!this.isDependencyEdge(edge)) continue;
+            const source = this.graph.getNode(edge.sourceId);
+            const target = this.graph.getNode(edge.targetId);
+            if (!source || !target || source.layer === target.layer) continue;
+
+            const sourceFile = path.resolve(source.filePath);
+            const targetFile = path.resolve(target.filePath);
+            if (!fileSet.has(sourceFile) || !fileSet.has(targetFile)) continue;
+
+            warnings.add(
+                `${source.name} (${source.layer}) -> ${target.name} (${target.layer}) [${edge.kind}]`,
+            );
+        }
+
+        return Array.from(warnings).slice(0, 10);
+    }
+
+    private getDependencyNodeIds(nodeId: string): string[] {
+        return this.graph.getOutgoingEdges(nodeId)
+            .filter(edge => this.isDependencyEdge(edge))
+            .map(edge => edge.targetId);
+    }
+
+    private getDependentNodeIds(nodeId: string): string[] {
+        return this.graph.getIncomingEdges(nodeId)
+            .filter(edge => this.isDependencyEdge(edge))
+            .map(edge => edge.sourceId);
+    }
+
+    private isDependencyEdge(edge: GraphEdge): boolean {
+        return DEPENDENCY_EDGE_KINDS.has(edge.kind);
+    }
+
+    private resolveDepth(maxDependents: number, override?: number): number {
+        if (override !== undefined && Number.isFinite(override)) {
+            return Math.min(50, Math.max(1, Math.trunc(override)));
+        }
+        return Math.min(20, Math.max(4, Math.round(Math.log2(maxDependents + 2) * 3)));
+    }
+
+    private emptyReport(rootFiles: string[]): BlastRadiusReport {
+        return {
+            rootFiles,
+            affectedFiles: [],
+            layerBreakdown: {},
+            crossLayerWarnings: [],
+            cycles: [],
+            totalFiles: 0,
+            executionPlan: [],
+            estimatedComplexity: 'low',
+        };
     }
 }
