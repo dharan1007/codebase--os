@@ -1,10 +1,9 @@
-import type { ModelRequest, ProjectConfig, AIProviderKind, AIProvider } from '../../types/index.js';
+import type { ModelRequest, ProjectConfig, AIProviderKind, AIProvider, TaskType } from '../../types/index.js';
 import { Database } from '../../storage/Database.js';
 import { ResourceMonitor } from './ResourceMonitor.js';
 import { AIProviderFactory } from '../ai/AIProviderFactory.js';
-import { SemanticModelSlug, ModelRegistry } from '../ai/ModelRegistry.js';
+import { type SemanticModelSlug, ModelRegistry } from '../ai/ModelRegistry.js';
 import { HotHealthTracker } from './HotHealthTracker.js';
-import { logger } from '../../utils/logger.js';
 
 export interface ProviderSelection {
     provider: AIProviderKind;
@@ -12,113 +11,141 @@ export interface ProviderSelection {
     tier: 1 | 2 | 3;
 }
 
+const CLOUD_PROVIDERS: AIProviderKind[] = ['openai', 'anthropic', 'gemini', 'openrouter'];
+
 export class ModelRouter {
     private health: HotHealthTracker;
 
     constructor(
-        private config: ProjectConfig, 
+        private config: ProjectConfig,
         private db: Database,
-        private monitor: ResourceMonitor
+        private monitor: ResourceMonitor,
     ) {
         this.health = HotHealthTracker.getInstance();
     }
 
-    /**
-     * Compatibility bridge for single-provider consumers.
-     */
     getProviderForTask(taskType: string): AIProvider {
+        const semanticRole = this.semanticRole(taskType as TaskType);
         const chain = this.selectProvider({
-            taskType: taskType as any,
+            taskType: taskType as TaskType,
             priority: 'medium',
-            context: 'compatibility-check',
-            maxTokens: 2000
+            context: 'provider-selection',
+            maxTokens: 2000,
         });
-        const best = chain[0] || { provider: 'openai', model: 'gpt-4o' };
-        
+
+        const configuredProvider = this.config.ai.provider as AIProviderKind;
+        const fallback: ProviderSelection = {
+            provider: configuredProvider,
+            model: this.config.ai.model || ModelRegistry.resolve(semanticRole, configuredProvider),
+            tier: 1,
+        };
+        const best = chain[0] ?? fallback;
         return AIProviderFactory.createRaw(best.provider, best.model);
     }
 
     /**
-     * Selects an optimally ranked chain of providers/models.
-     * Guarantees 'Provider Diversity' in the top 2 slots to prevent
-     * getting stuck on a single rate-limited provider.
+     * Builds a provider-diverse chain for the semantic task role. Model IDs are
+     * resolved by ModelRegistry/environment config instead of a hardcoded model
+     * leaderboard that becomes stale between releases.
      */
     selectProvider(request: ModelRequest): ProviderSelection[] {
         const candidates = this.getCandidatePool(request.taskType);
-        
-        // 1. Filter by Health and Key Availability
-        const available = candidates.filter(sel => {
-            if (!this.checkKeyAvailability(sel.provider)) return false;
-            
-            // Check real-time health (Instant Cooldowns & Provider Circuit Breaking)
-            if (!this.health.isAvailable(sel.provider, sel.model)) {
-                return false;
-            }
-
-            // Check resource budget (RPM/Cost)
-            const status = this.monitor.canExecute(sel.provider);
-            return status.allowed;
+        const available = candidates.filter(candidate => {
+            if (!this.checkKeyAvailability(candidate.provider)) return false;
+            if (!this.health.isAvailable(candidate.provider, candidate.model)) return false;
+            return this.monitor.canExecute(candidate.provider).allowed;
         });
 
-        // 2. Rank by Tier and Health Score
         const sorted = available.sort((a, b) => {
-            const scoreA = this.health.getScore(a.provider, a.model) - (a.tier * 20);
-            const scoreB = this.health.getScore(b.provider, b.model) - (b.tier * 20);
-            return scoreB - scoreA;
+            const preferredA = a.provider === this.config.ai.provider ? 12 : 0;
+            const preferredB = b.provider === this.config.ai.provider ? 12 : 0;
+            const scoreA = this.health.getScore(a.provider, a.model) + preferredA - a.tier * 20;
+            const scoreB = this.health.getScore(b.provider, b.model) + preferredB - b.tier * 20;
+            return scoreB - scoreA || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model);
         });
 
-        // 3. ENFORCE DIVERSITY: Ensure top 2 are different providers if available
-        if (sorted.length >= 2 && sorted[0].provider === sorted[1].provider) {
-            const diffProviderIdx = sorted.findIndex(s => s.provider !== sorted[0].provider);
-            if (diffProviderIdx !== -1) {
-                // Swap the second slot with the first different provider found
-                const surrogate = sorted[diffProviderIdx];
-                sorted.splice(diffProviderIdx, 1);
-                sorted.splice(1, 0, surrogate);
+        // De-duplicate exact provider/model pairs while preserving ranking.
+        const unique: ProviderSelection[] = [];
+        const seen = new Set<string>();
+        for (const candidate of sorted) {
+            const key = `${candidate.provider}:${candidate.model}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            unique.push(candidate);
+        }
+
+        // Keep provider diversity near the front of the fallback chain.
+        if (unique.length >= 2 && unique[0]!.provider === unique[1]!.provider) {
+            const differentIndex = unique.findIndex((candidate, index) =>
+                index > 0 && candidate.provider !== unique[0]!.provider,
+            );
+            if (differentIndex > 1) {
+                const [different] = unique.splice(differentIndex, 1);
+                unique.splice(1, 0, different!);
             }
         }
 
-        return sorted;
+        return unique;
     }
 
-    private getCandidatePool(taskType: string): ProviderSelection[] {
+    private getCandidatePool(taskType: TaskType): ProviderSelection[] {
+        const semanticRole = this.semanticRole(taskType);
         const pool: ProviderSelection[] = [];
+        const configuredProvider = this.config.ai.provider as AIProviderKind;
 
-        // TIER 1: THE PRINCIPALS (High Accuracy, High Cost)
-        pool.push({ provider: 'anthropic', model: 'claude-3-5-sonnet-latest', tier: 1 });
-        pool.push({ provider: 'openai', model: 'gpt-4o', tier: 1 });
-        pool.push({ provider: 'openrouter', model: 'anthropic/claude-3.5-sonnet', tier: 1 });
+        if (this.config.ai.model) {
+            pool.push({
+                provider: configuredProvider,
+                model: this.config.ai.model,
+                tier: 1,
+            });
+        }
 
-        // TIER 2: THE RELIABLES (Solid Performance, Good Limits)
-        pool.push({ provider: 'gemini', model: 'gemini-1.5-pro', tier: 2 });
-        pool.push({ provider: 'openrouter', model: 'google/gemini-pro-1.5', tier: 2 });
-        pool.push({ provider: 'openrouter', model: 'meta-llama/llama-3.1-405b', tier: 2 });
+        const providers: AIProviderKind[] = [
+            configuredProvider,
+            ...CLOUD_PROVIDERS.filter(provider => provider !== configuredProvider),
+            'ollama',
+        ];
 
-        // TIER 3: THE WORKERS (Free, Unstable, or Fast)
-        pool.push({ provider: 'gemini', model: 'gemini-1.5-flash', tier: 3 });
-        pool.push({ provider: 'openrouter', model: 'google/gemini-flash-1.5', tier: 3 });
-        pool.push({ provider: 'openrouter', model: 'google/gemma-2-9b-it:free', tier: 3 });
-        pool.push({ provider: 'openai', model: 'gpt-4o-mini', tier: 3 });
-
-        // If user specified a specific provider/model in config, promote it to Tier 1
-        const userKind = this.config.ai.provider as AIProviderKind;
-        const userModel = this.config.ai.model;
-        if (userModel) {
-            pool.unshift({ provider: userKind, model: userModel, tier: 1 });
+        for (const provider of providers) {
+            try {
+                pool.push({
+                    provider,
+                    model: ModelRegistry.resolve(semanticRole, provider),
+                    tier: provider === configuredProvider ? 1 : provider === 'ollama' ? 3 : 2,
+                });
+            } catch {
+                // Semantic role intentionally unsupported for this provider.
+            }
         }
 
         return pool;
     }
 
+    private semanticRole(taskType: TaskType): SemanticModelSlug {
+        switch (taskType) {
+            case 'simple':
+                return 'reasoning-fast';
+            case 'analysis':
+            case 'sync':
+                return 'analysis-fast';
+            case 'code':
+            case 'fix':
+            case 'reasoning':
+            default:
+                return 'reasoning-high';
+        }
+    }
+
     private checkKeyAvailability(provider: AIProviderKind): boolean {
-        const keyMap: Record<string, string | undefined> = {
+        if (provider === 'ollama') return true;
+        const keyMap: Partial<Record<AIProviderKind, string | undefined>> = {
             openai: process.env['OPENAI_API_KEY'],
             anthropic: process.env['ANTHROPIC_API_KEY'],
             gemini: process.env['GEMINI_API_KEY'],
             openrouter: process.env['OPENROUTER_API_KEY'],
-            ollama: 'local-available' 
         };
         const key = keyMap[provider];
-        return !!(key && key.trim().length > 0);
+        return Boolean(key?.trim());
     }
 }
