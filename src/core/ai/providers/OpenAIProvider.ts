@@ -7,22 +7,37 @@ import { classifyProviderError } from './ProviderError.js';
 const MAX_RETRIES = 4;
 const BASE_DELAY_MS = 1000;
 
+interface ResponsesApiPayload {
+    output?: Array<{
+        type?: string;
+        content?: Array<{ type?: string; text?: string }>;
+    }>;
+    usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        total_tokens?: number;
+    };
+    model?: string;
+    error?: { message?: string } | null;
+    status?: string;
+}
+
 export class OpenAIProvider implements AIProvider {
     readonly kind: AIProviderKind = 'openai';
     private client: OpenAI;
     private defaultModel: string;
     private limiter: RateLimiter;
 
-    constructor(apiKey: string, model = 'gpt-4o') {
+    constructor(private apiKey: string, model = 'gpt-5.6') {
         this.client = new OpenAI({
             apiKey,
             timeout: 300_000,
         });
         this.defaultModel = model;
 
-        const rpm = parseInt(process.env['OPENAI_RPM'] ?? '500', 10);
+        const rpm = this.positiveInt(process.env['OPENAI_RPM'], 50);
         this.limiter = new RateLimiter({
-            maxConcurrency: 5,
+            maxConcurrency: Math.min(5, this.positiveInt(process.env['OPENAI_MAX_CONCURRENCY'], 5)),
             requestsPerMinute: rpm,
             delayBetweenRequestsMs: Math.ceil(60_000 / rpm),
             circuitBreakerThreshold: 5,
@@ -33,39 +48,76 @@ export class OpenAIProvider implements AIProvider {
     }
 
     async execute(request: ModelRequest): Promise<ModelResponse> {
-        return this.limiter.execute(async () => {
-            return RateLimiter.withRetry(
-                () => this.callAPI(request),
+        return this.limiter.execute(async () =>
+            RateLimiter.withRetry(
+                () => this.callResponsesAPI(request),
                 MAX_RETRIES,
                 BASE_DELAY_MS,
-                'openai.execute'
-            );
-        });
+                'openai.execute',
+            ),
+        );
     }
 
-    private async callAPI(request: ModelRequest): Promise<ModelResponse> {
+    /**
+     * Uses the provider's current Responses endpoint directly. This keeps the
+     * runtime compatible with current OpenAI reasoning models without forcing a
+     * package-lock migration solely to expose a newer SDK convenience method.
+     */
+    private async callResponsesAPI(request: ModelRequest): Promise<ModelResponse> {
         const model = request.modelOverride ?? this.defaultModel;
         try {
-            const response = await this.client.chat.completions.create({
+            const body: Record<string, unknown> = {
                 model,
-                messages: [
-                    { role: 'system', content: request.systemPrompt ?? 'You are a helpful assistant.' },
-                    { role: 'user', content: request.context },
-                ],
-                temperature: request.temperature ?? 0.2,
-                max_tokens: request.maxTokens ?? 4096,
+                input: request.context,
+                instructions: request.systemPrompt ?? 'You are a precise software engineering assistant.',
+                max_output_tokens: request.maxTokens ?? 4096,
+                store: false,
+            };
+
+            const signal = (request as any).signal as AbortSignal | undefined;
+            const response = await fetch('https://api.openai.com/v1/responses', {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(body),
+                signal,
             });
 
-            const content = response.choices[0]?.message?.content ?? '';
+            const payload = await response.json() as ResponsesApiPayload;
+            if (!response.ok) {
+                const error = new Error(
+                    payload.error?.message || `OpenAI Responses API returned HTTP ${response.status}`,
+                ) as Error & { status?: number };
+                error.status = response.status;
+                throw error;
+            }
+
+            const content = (payload.output ?? [])
+                .filter(item => item.type === 'message' || Array.isArray(item.content))
+                .flatMap(item => item.content ?? [])
+                .filter(part => part.type === 'output_text' && typeof part.text === 'string')
+                .map(part => part.text!)
+                .join('');
+
+            if (!content.trim()) {
+                throw new Error(
+                    `OpenAI response completed without output text (status=${payload.status ?? 'unknown'}).`,
+                );
+            }
+
             return {
                 content,
                 usage: {
-                    promptTokens: response.usage?.prompt_tokens ?? 0,
-                    outputTokens: response.usage?.completion_tokens ?? 0,
-                    totalTokens: response.usage?.total_tokens ?? 0,
+                    promptTokens: payload.usage?.input_tokens ?? 0,
+                    outputTokens: payload.usage?.output_tokens ?? 0,
+                    totalTokens:
+                        payload.usage?.total_tokens ??
+                        (payload.usage?.input_tokens ?? 0) + (payload.usage?.output_tokens ?? 0),
                 },
                 provider: this.kind,
-                model,
+                model: payload.model ?? model,
             };
         } catch (err) {
             const classified = classifyProviderError(err, 'openai');
@@ -82,24 +134,22 @@ export class OpenAIProvider implements AIProvider {
     async listModels(): Promise<string[]> {
         try {
             const response = await this.client.models.list();
-            if (response?.data?.length > 0) {
-                return response.data.map(m => m.id);
-            }
+            const ids = response?.data?.map(model => model.id).filter(Boolean) ?? [];
+            if (ids.length > 0) return ids.sort();
         } catch (err) {
-            logger.debug('OpenAI: Failed to fetch model list', { error: String(err) });
+            logger.debug('OpenAI: model discovery failed', { error: String(err) });
         }
-        return ['gpt-4o', 'gpt-4o-mini', 'o1-preview', 'o1-mini', 'o3-mini'];
+        return [this.defaultModel];
     }
 
     async isAvailable(): Promise<boolean> {
+        if (!this.apiKey.trim()) return false;
         try {
-            await this.client.models.list();
-            return true;
+            const models = await this.listModels();
+            return models.length > 0;
         } catch (err) {
             const classified = classifyProviderError(err, 'openai');
-            if (classified.code === 'AUTH_ERROR') {
-                logger.warn('OpenAI: Invalid API key');
-            }
+            if (classified.code === 'AUTH_ERROR') logger.warn('OpenAI: invalid API key');
             return false;
         }
     }
@@ -108,7 +158,7 @@ export class OpenAIProvider implements AIProvider {
         return this.limiter.execute(async () => {
             try {
                 const response = await this.client.embeddings.create({
-                    model: 'text-embedding-3-small',
+                    model: process.env['OPENAI_EMBEDDING_MODEL'] || 'text-embedding-3-small',
                     input: text,
                 });
                 return response.data[0]!.embedding;
@@ -123,13 +173,18 @@ export class OpenAIProvider implements AIProvider {
         return this.limiter.execute(async () => {
             try {
                 const response = await this.client.embeddings.create({
-                    model: 'text-embedding-3-small',
+                    model: process.env['OPENAI_EMBEDDING_MODEL'] || 'text-embedding-3-small',
                     input: texts,
                 });
-                return response.data.map(d => d.embedding);
+                return response.data.map(item => item.embedding);
             } catch (err) {
                 throw classifyProviderError(err, 'openai-batch-embed');
             }
         });
+    }
+
+    private positiveInt(value: string | undefined, fallback: number): number {
+        const parsed = Number.parseInt(value ?? '', 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
     }
 }
