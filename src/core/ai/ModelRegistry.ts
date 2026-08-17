@@ -17,9 +17,8 @@ export type SemanticModelSlug =
     | 'embedding-small';
 
 /**
- * Provider model defaults are deliberately centralized and overridable.
- * They are compatibility defaults, not a benchmark ranking. Operators can pin
- * exact model IDs without waiting for a Codebase OS release.
+ * Provider model defaults are centralized and overridable. These are
+ * compatibility defaults, not a claimed benchmark ranking.
  */
 const DEFAULTS: Record<SemanticModelSlug, Partial<Record<AIProviderKind, string>>> = {
     'reasoning-high': {
@@ -30,14 +29,17 @@ const DEFAULTS: Record<SemanticModelSlug, Partial<Record<AIProviderKind, string>
         ollama: 'qwen2.5-coder:latest',
     },
     'reasoning-fast': {
-        openai: 'gpt-5.6-luna',
+        // OpenAI's public API quickstart documents the stable `gpt-5.6` ID.
+        // Use the same verified ID for fast/analysis roles unless an operator
+        // explicitly pins a different current model through environment config.
+        openai: 'gpt-5.6',
         anthropic: 'claude-sonnet-4-20250514',
         gemini: 'gemini-3.6-flash',
         openrouter: 'google/gemini-3.6-flash',
         ollama: 'qwen2.5-coder:7b',
     },
     'analysis-fast': {
-        openai: 'gpt-5.6-terra',
+        openai: 'gpt-5.6',
         anthropic: 'claude-sonnet-4-20250514',
         gemini: 'gemini-3.6-flash',
         openrouter: 'google/gemini-3.6-flash',
@@ -97,9 +99,9 @@ export const ModelRegistry = {
     },
 
     getCapabilities(modelId: string): ModelCapabilities {
-        // Context values are deliberately conservative when provider APIs do not
-        // expose capability metadata. ContextManager may use less than a model's
-        // maximum, but must never assume an unverified larger window.
+        // Conservative limits are safer than inventing a provider maximum. Each
+        // value can be overridden from environment when an account exposes a
+        // larger context window or different rate tier.
         if (modelId.startsWith('gpt-5.6')) {
             return {
                 supportsSystemRole: true,
