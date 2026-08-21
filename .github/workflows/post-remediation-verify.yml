@@ -1,6 +1,6 @@
 name: Post-remediation verification
 
-# Rerun after the CLI compile fix.
+# Emit focused failure excerpts for the repository audit.
 on:
   push:
     branches:
@@ -68,8 +68,10 @@ jobs:
             echo "pack_exit=$PACK_EXIT"
             echo "--- npm ci tail ---"
             tail -n 20 /tmp/npm-ci.log
+            echo "--- failing test excerpts ---"
+            grep -n -B 8 -A 20 '^not ok' /tmp/verify.log || true
             echo "--- verify tail ---"
-            tail -n 40 /tmp/verify.log
+            tail -n 60 /tmp/verify.log
             echo "--- audit tail ---"
             tail -n 30 /tmp/audit.log
             echo "--- pack tail ---"
