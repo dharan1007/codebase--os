@@ -54,11 +54,11 @@
         </div>
       </div>
 
-      <div class="trace-card reveal" aria-label="Example Codebase OS execution trace">
+      <div class="trace-card reveal" aria-label="Codebase OS execution model">
         <div class="trace-topbar">
           <div class="trace-dots" aria-hidden="true"><span></span><span></span><span></span></div>
           <span class="trace-label">cos agent</span>
-          <span class="trace-state">verified</span>
+          <span class="trace-state">runtime controlled</span>
         </div>
         <div class="trace-grid">
           <div class="trace-steps" role="list">
@@ -76,11 +76,11 @@
             </button>
           </div>
           <div class="trace-output" aria-live="polite">
-            <div class="trace-meta"><span id="trace-command">cos scan</span><span id="trace-duration">1.2s</span></div>
-            <pre id="trace-content"><code><span class="muted">graph</span>  1,842 nodes / 3,116 edges
-<span class="muted">scope</span>  auth, api, database
-<span class="good">ready</span>  dependency topology loaded</code></pre>
-            <div class="trace-footer"><span>Runtime owns the completion decision.</span><span class="trace-pulse"><i></i> live evidence</span></div>
+            <div class="trace-meta"><span id="trace-command">cos scan</span><span id="trace-duration">graph ready</span></div>
+            <pre id="trace-content"><code><span class="muted">graph</span>  repository structure indexed
+<span class="muted">scope</span>  dependency relationships mapped
+<span class="good">ready</span>  planning context available</code></pre>
+            <div class="trace-footer"><span>Runtime owns the completion decision.</span><span class="trace-pulse"><i></i> evidence path</span></div>
           </div>
         </div>
       </div>
@@ -118,7 +118,7 @@
         <article class="feature-row reveal">
           <div class="feature-index">03</div>
           <div class="feature-copy"><h3>Independent verification</h3><p>The agent cannot make a mutation and simply declare success. The runtime discovers project gates—types, lint, tests, builds and supported language checks—and rejects completion when evidence fails.</p></div>
-          <div class="feature-visual verify-visual" aria-hidden="true"><div><span>typecheck</span><b>pass</b></div><div><span>tests</span><b>pass</b></div><div><span>build</span><b>pass</b></div><div class="verify-final"><span>completion</span><b>allowed</b></div></div>
+          <div class="feature-visual verify-visual" aria-hidden="true"><div><span>typecheck</span><b>gate</b></div><div><span>tests</span><b>gate</b></div><div><span>build</span><b>gate</b></div><div class="verify-final"><span>completion</span><b>evidence required</b></div></div>
         </article>
       </div>
     </section>
@@ -162,15 +162,15 @@
 
     <section class="workflow-section">
       <div class="section-shell workflow-shell">
-        <p class="eyebrow reveal">04 / Use</p>
+        <p class="eyebrow reveal">04 / Source</p>
         <div class="workflow-command reveal">
-          <span>$</span><code>npm install -g codebase-os</code><button type="button" data-copy="npm install -g codebase-os" aria-label="Copy install command">copy</button>
+          <span>$</span><code>git clone -b agent/production-hardening https://github.com/dharan1007/codebase--os.git</code><button type="button" data-copy="git clone -b agent/production-hardening https://github.com/dharan1007/codebase--os.git" aria-label="Copy clone command">copy</button>
         </div>
         <div class="workflow-grid">
-          <div class="workflow-item reveal"><span>1</span><div><b>cos scan</b><p>Build durable codebase context.</p></div></div>
-          <div class="workflow-item reveal"><span>2</span><div><b>cos plan</b><p>Inspect dependency-first scope.</p></div></div>
-          <div class="workflow-item reveal"><span>3</span><div><b>cos ask</b><p>Run the controlled agent loop.</p></div></div>
-          <div class="workflow-item reveal"><span>4</span><div><b>cos rollback</b><p>Reverse recorded work safely.</p></div></div>
+          <div class="workflow-item reveal"><span>1</span><div><b>npm ci</b><p>Install the locked dependency graph.</p></div></div>
+          <div class="workflow-item reveal"><span>2</span><div><b>npm run verify</b><p>Run typecheck, build and tests.</p></div></div>
+          <div class="workflow-item reveal"><span>3</span><div><b>cos scan</b><p>Build durable codebase context.</p></div></div>
+          <div class="workflow-item reveal"><span>4</span><div><b>cos ask</b><p>Run the controlled agent loop.</p></div></div>
         </div>
       </div>
     </section>
