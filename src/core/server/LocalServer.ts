@@ -7,6 +7,7 @@ import { FailureStore } from '../failure/FailureStore.js';
 import { ResourceMonitor } from '../orchestrator/ResourceMonitor.js';
 
 const LOOPBACK_HOST = '127.0.0.1';
+const MAX_RECENT_STEPS = 50;
 
 let UI_ROOT = path.resolve(__dirname, '../../ui');
 if (!fs.existsSync(UI_ROOT)) {
@@ -33,6 +34,8 @@ export class LocalServer extends EventEmitter {
         super();
         this.port = this.parsePort(process.env['COS_DASHBOARD_PORT'], 3000);
         this.server = http.createServer((req, res) => this.handleRequest(req, res));
+        this.server.requestTimeout = 15_000;
+        this.server.headersTimeout = 10_000;
     }
 
     start(): void {
@@ -72,7 +75,7 @@ export class LocalServer extends EventEmitter {
 
     emitStep(stepData: { step: number; action: any; result: any }): void {
         this.recentSteps.push({ ...stepData, timestamp: Date.now() });
-        if (this.recentSteps.length > 50) this.recentSteps.shift();
+        if (this.recentSteps.length > MAX_RECENT_STEPS) this.recentSteps.shift();
         this.broadcastSSE('step', stepData);
     }
 
@@ -90,18 +93,25 @@ export class LocalServer extends EventEmitter {
 
     clearPendingAction(): void {
         this.currentPendingAction = null;
+        this.broadcastSSE('pending_action', null);
     }
 
     private broadcastSSE(event: string, data: any): void {
         const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
         for (const client of this.sseClients) {
-            try { client.write(payload); } catch { /* client disconnected */ }
+            try { client.write(payload); } catch { /* disconnected */ }
         }
         this.sseClients = this.sseClients.filter(client => !client.destroyed);
     }
 
     private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
         this.applySecurityHeaders(res);
+
+        if (this.hasTraversal(req.url ?? '/')) {
+            res.writeHead(403);
+            res.end('Forbidden');
+            return;
+        }
 
         const origin = req.headers.origin;
         if (origin && this.isTrustedOrigin(origin)) {
@@ -131,9 +141,7 @@ export class LocalServer extends EventEmitter {
             });
             res.write(':ok\n\n');
             this.sseClients.push(res);
-            for (const step of this.recentSteps) {
-                res.write(`event: step\ndata: ${JSON.stringify(step)}\n\n`);
-            }
+            for (const step of this.recentSteps) res.write(`event: step\ndata: ${JSON.stringify(step)}\n\n`);
             req.on('close', () => {
                 this.sseClients = this.sseClients.filter(client => client !== res);
             });
@@ -182,11 +190,18 @@ export class LocalServer extends EventEmitter {
             return;
         }
 
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+            res.writeHead(405, { Allow: 'GET, HEAD, POST, OPTIONS' });
+            res.end('Method Not Allowed');
+            return;
+        }
+
         this.serveStatic(req, res);
     }
 
     private serveStatic(req: http.IncomingMessage, res: http.ServerResponse): void {
-        let rawPath = req.url === '/' ? 'index.html' : (req.url ?? 'index.html').split('?')[0]!;
+        const urlPath = (req.url ?? '/').split('?')[0]!;
+        let rawPath = urlPath === '/' ? 'index.html' : urlPath;
         try {
             rawPath = decodeURIComponent(rawPath);
         } catch {
@@ -220,7 +235,8 @@ export class LocalServer extends EventEmitter {
         fs.readFile(candidate, (err, content) => {
             if (!err) {
                 res.writeHead(200, { 'Content-Type': contentType });
-                res.end(content);
+                if (req.method === 'HEAD') res.end();
+                else res.end(content);
                 return;
             }
 
@@ -233,7 +249,8 @@ export class LocalServer extends EventEmitter {
                         return;
                     }
                     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                    res.end(fallback);
+                    if (req.method === 'HEAD') res.end();
+                    else res.end(fallback);
                 });
                 return;
             }
@@ -243,15 +260,29 @@ export class LocalServer extends EventEmitter {
         });
     }
 
+    private hasTraversal(rawUrl: string): boolean {
+        const rawPath = rawUrl.split('?')[0] ?? '/';
+        // Reject encoded dot-segments before decoding. URL clients may normalize
+        // them, but raw HTTP requests must never reach static path resolution.
+        if (/(?:^|\/)(?:%2e|\.){2}(?:\/|%2f|$)/i.test(rawPath)) return true;
+        try {
+            const decoded = decodeURIComponent(rawPath).replace(/\\/g, '/');
+            return decoded.split('/').some(segment => segment === '..');
+        } catch {
+            return false;
+        }
+    }
+
     private applySecurityHeaders(res: http.ServerResponse): void {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Referrer-Policy', 'no-referrer');
         res.setHeader('X-Frame-Options', 'DENY');
         res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
         res.setHeader(
             'Content-Security-Policy',
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
-            "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+            "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         );
     }
 
