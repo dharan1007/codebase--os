@@ -1,8 +1,8 @@
-commit=455a6002fecd79d28bd2ef2be5b696bb5b7d3a71
+commit=281f058dd1bb8750b9cdcfdded146e7eb71544fb
 node=v20.20.2
 npm=10.8.2
 npm_ci_exit=0
-verify_exit=2
+verify_exit=1
 audit_exit=0
 pack_exit=0
 --- npm ci tail ---
@@ -16,33 +16,66 @@ added 277 packages, and audited 278 packages in 9s
 
 found 0 vulnerabilities
 --- verify tail ---
-
-> codebase-os@1.0.0 verify
-> npm run typecheck && npm run build && npm test
-
-
-> codebase-os@1.0.0 typecheck
-> tsc --project tsconfig.json --noEmit
-
-src/cli/commands/chat.ts(81,33): error TS2551: Property 'closed' does not exist on type 'Interface'. Did you mean 'close'?
+  ...
+# Subtest: orders imported dependencies before consumers
+ok 13 - orders imported dependencies before consumers
+  ---
+  duration_ms: 3.186765
+  ...
+# Subtest: does not treat provides edges as dependency ordering edges
+ok 14 - does not treat provides edges as dependency ordering edges
+  ---
+  duration_ms: 0.383948
+  ...
+# Subtest: surfaces dependency cycles instead of presenting them as valid topology
+ok 15 - surfaces dependency cycles instead of presenting them as valid topology
+  ---
+  duration_ms: 0.663049
+  ...
+# Subtest: discovers repository gates and requires all of them to pass
+ok 16 - discovers repository gates and requires all of them to pass
+  ---
+  duration_ms: 11.846768
+  ...
+# Subtest: fails closed when a discovered gate fails
+ok 17 - fails closed when a discovered gate fails
+  ---
+  duration_ms: 1.560567
+  ...
+# Subtest: fails closed when code changed but no executable verification strategy exists
+ok 18 - fails closed when code changed but no executable verification strategy exists
+  ---
+  duration_ms: 0.942752
+  ...
+1..18
+# tests 18
+# suites 0
+# pass 16
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 700.40057
 --- audit tail ---
 found 0 vulnerabilities
 --- pack tail ---
-npm notice
-npm notice 📦  codebase-os@1.0.0
-npm notice Tarball Contents
-npm notice 1.5kB LICENSE
-npm notice 12.8kB README.md
-npm notice 5.1kB SECURITY.md
+npm notice 776B dist/utils/TokenBucket.d.ts
+npm notice 455B dist/utils/TokenBucket.d.ts.map
+npm notice 1.6kB dist/utils/TokenBucket.js
+npm notice 1.3kB dist/utils/TokenBucket.js.map
+npm notice 2.4kB dist/utils/validation.d.ts
+npm notice 1.3kB dist/utils/validation.d.ts.map
+npm notice 8.6kB dist/utils/validation.js
+npm notice 7.3kB dist/utils/validation.js.map
 npm notice 2.4kB package.json
 npm notice Tarball Details
 npm notice name: codebase-os
 npm notice version: 1.0.0
 npm notice filename: codebase-os-1.0.0.tgz
-npm notice package size: 8.9 kB
-npm notice unpacked size: 21.9 kB
-npm notice shasum: d31f374d1363cb7b210daaa403b7c1641b4c0489
-npm notice integrity: sha512-K0jtNpykJgimj[...]ljQlv4EWRrEgg==
-npm notice total files: 4
+npm notice package size: 373.0 kB
+npm notice unpacked size: 1.7 MB
+npm notice shasum: 2cdedad51c5a88386fd899c97b73e53eba2c44bf
+npm notice integrity: sha512-rmWuMetZA+KPq[...]T5jA7UPEEWUrg==
+npm notice total files: 541
 npm notice
 codebase-os-1.0.0.tgz
