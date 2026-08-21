@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, type ChildProcessByStdio } from 'child_process';
+import type { Readable } from 'stream';
 import { logger } from '../../utils/logger.js';
 
 export type DeployTarget = 'vercel' | 'firebase' | 'fly' | 'docker';
@@ -30,7 +31,7 @@ export class DeployManager {
         timeoutMs = DEFAULT_TIMEOUT_MS,
     ): Promise<{ exitCode: number; output: string; error?: string }> {
         return new Promise(resolve => {
-            let proc: ChildProcessWithoutNullStreams;
+            let proc: ChildProcessByStdio<null, Readable, Readable>;
             try {
                 proc = spawn(command, args, {
                     cwd: this.rootDir,
