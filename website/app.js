@@ -18,37 +18,37 @@
   const traces = {
     scan: {
       command: 'cos scan',
-      duration: '1.2s',
-      content: '<span class="muted">graph</span>  1,842 nodes / 3,116 edges\n<span class="muted">scope</span>  auth, api, database\n<span class="good">ready</span>  dependency topology loaded'
+      state: 'graph ready',
+      content: '<span class="muted">graph</span>  repository structure indexed\n<span class="muted">scope</span>  dependency relationships mapped\n<span class="good">ready</span>  planning context available'
     },
     plan: {
-      command: 'cos plan "refresh-token rotation"',
-      duration: '186ms',
-      content: '<span class="muted">root</span>   src/auth/session.ts\n<span class="muted">blast</span>  7 files / 3 layers\n<span class="good">order</span>  schema → service → api → tests'
+      command: 'cos plan "target change"',
+      state: 'ordered',
+      content: '<span class="muted">root</span>   requested change located\n<span class="muted">blast</span>  dependent files identified\n<span class="good">order</span>  dependency-first plan produced'
     },
     change: {
-      command: 'cos ask "rotate refresh tokens safely"',
-      duration: '4 steps',
-      content: '<span class="muted">patch</span>  context validated\n<span class="muted">record</span> transaction persisted\n<span class="good">state</span>  mutation committed'
+      command: 'cos ask "implement the change"',
+      state: 'recorded',
+      content: '<span class="muted">patch</span>  file context validated\n<span class="muted">record</span> durable history written\n<span class="good">state</span>  tracked mutation available for verify'
     },
     verify: {
       command: 'verification engine',
-      duration: '8.4s',
-      content: '<span class="muted">types</span>  pass\n<span class="muted">tests</span>  pass\n<span class="muted">build</span>  pass\n<span class="good">done</span>   completion independently allowed'
+      state: 'evidence gate',
+      content: '<span class="muted">discover</span> repository gates selected\n<span class="muted">execute</span> checks run outside model self-report\n<span class="good">finish</span>  completion depends on gate result'
     }
   };
 
   const traceButtons = document.querySelectorAll('.trace-step');
   const traceCommand = document.getElementById('trace-command');
-  const traceDuration = document.getElementById('trace-duration');
+  const traceState = document.getElementById('trace-duration');
   const traceContent = document.getElementById('trace-content');
 
   function selectTrace(key) {
     const trace = traces[key];
-    if (!trace || !traceCommand || !traceDuration || !traceContent) return;
+    if (!trace || !traceCommand || !traceState || !traceContent) return;
     traceButtons.forEach(button => button.classList.toggle('active', button.dataset.trace === key));
     traceCommand.textContent = trace.command;
-    traceDuration.textContent = trace.duration;
+    traceState.textContent = trace.state;
     traceContent.innerHTML = `<code>${trace.content}</code>`;
   }
 
