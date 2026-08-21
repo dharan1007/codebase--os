@@ -74,11 +74,12 @@ export function chatCommand(): Command {
                 output: process.stdout,
                 terminal: process.stdin.isTTY,
             });
+            let isClosed = false;
 
             const ask = (): void => {
                 rl.question(chalk.cyan('you  ') + chalk.gray('> '), input => {
                     void processInput(input.trim()).finally(() => {
-                        if (!rl.closed) ask();
+                        if (!isClosed) ask();
                     });
                 });
             };
@@ -159,6 +160,7 @@ export function chatCommand(): Command {
             };
 
             rl.on('close', () => {
+                isClosed = true;
                 console.log(chalk.gray('\nSession ended.\n'));
             });
 
