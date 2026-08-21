@@ -3,55 +3,13 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { spawnSync } from 'child_process';
+import { resolveReadableProjectPath, resolveWithinRoot } from '../../security/PathPolicy.js';
 
 export interface ToolResult {
     success: boolean;
     output: string;
     error?: string;
     isStreaming?: boolean;
-}
-
-function isWithin(candidate: string, root: string): boolean {
-    return candidate === root || candidate.startsWith(root + path.sep);
-}
-
-/**
- * Resolves a path inside the project sandbox and defends against both lexical
- * `../` escapes and symlink escapes. For a path that does not exist yet, the
- * nearest existing ancestor is realpath-checked.
- */
-function resolveWithinRoot(filePath: string, rootDir: string, label: string): string {
-    const rootResolved = path.resolve(rootDir);
-    const candidate = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(rootResolved, filePath);
-
-    if (!isWithin(candidate, rootResolved)) {
-        throw new Error(`Path sandbox violation: "${label}" resolves outside project root`);
-    }
-
-    const rootReal = fs.realpathSync(rootResolved);
-    if (fs.existsSync(candidate)) {
-        const candidateReal = fs.realpathSync(candidate);
-        if (!isWithin(candidateReal, rootReal)) {
-            throw new Error(`Path sandbox violation: "${label}" escapes project root through a symlink`);
-        }
-        return candidate;
-    }
-
-    let ancestor = path.dirname(candidate);
-    while (!fs.existsSync(ancestor)) {
-        const parent = path.dirname(ancestor);
-        if (parent === ancestor) break;
-        ancestor = parent;
-    }
-
-    if (fs.existsSync(ancestor)) {
-        const ancestorReal = fs.realpathSync(ancestor);
-        if (!isWithin(ancestorReal, rootReal)) {
-            throw new Error(`Path sandbox violation: parent of "${label}" escapes project root through a symlink`);
-        }
-    }
-
-    return candidate;
 }
 
 function sha256(content: string): string {
@@ -68,10 +26,6 @@ function countPatchLines(diff: string): { added: number; removed: number } {
     return { added, removed };
 }
 
-/**
- * Converts an LLM-produced single-file hunk stream into a canonical patch whose
- * path is controlled by Codebase OS, not by model output.
- */
 function canonicalizeSingleFilePatch(filePath: string, unifiedDiff: string, rootDir: string): string {
     const hunkIndex = unifiedDiff.search(/^@@/m);
     if (hunkIndex < 0) {
@@ -91,19 +45,22 @@ function canonicalizeSingleFilePatch(filePath: string, unifiedDiff: string, root
     if (!relative || relative.startsWith('../')) {
         throw new Error(`patch_file rejected: invalid target path ${filePath}`);
     }
-
     return `--- a/${relative}\n+++ b/${relative}\n${body}\n`;
 }
 
-/** Reads file content for the AI agent. */
+/** Reads project content that is safe to expose to an AI provider. */
 export async function readFileTool(filePath: string, rootDir: string): Promise<ToolResult> {
     try {
-        const resolved = resolveWithinRoot(filePath, rootDir, filePath);
+        const resolved = resolveReadableProjectPath(filePath, rootDir);
         if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
             return { success: false, output: '', error: `File not found: ${filePath}` };
         }
+        const stat = fs.statSync(resolved);
+        if (stat.size > 4 * 1024 * 1024) {
+            return { success: false, output: '', error: `read_file rejected: ${filePath} exceeds the 4 MiB text safety limit` };
+        }
         const content = fs.readFileSync(resolved, 'utf8');
-        const truncated = content.length > 8000 ? content.slice(0, 8000) + '\n... (truncated)' : content;
+        const truncated = content.length > 16_000 ? `${content.slice(0, 16_000)}\n... (truncated)` : content;
         return { success: true, output: truncated };
     } catch (err) {
         return { success: false, output: '', error: String(err) };
@@ -125,8 +82,10 @@ export async function writeFileTool(filePath: string, content: string, rootDir: 
             };
         }
 
-        const dir = path.dirname(resolved);
-        fs.mkdirSync(dir, { recursive: true });
+        fs.mkdirSync(path.dirname(resolved), { recursive: true });
+        // Re-check the parent after mkdir so a concurrent symlink swap cannot
+        // redirect the final write outside the repository.
+        resolveWithinRoot(filePath, rootDir, filePath);
         fs.writeFileSync(resolved, content, { encoding: 'utf8', flag: 'wx' });
         return {
             success: true,
@@ -137,13 +96,7 @@ export async function writeFileTool(filePath: string, content: string, rootDir: 
     }
 }
 
-/**
- * Applies a single-file unified diff transactionally through `git apply`.
- *
- * `git apply --check` validates every context/removal line against the current
- * file before any write occurs. A stale or hallucinated patch therefore fails
- * closed instead of splicing at an approximate line number.
- */
+/** Applies a context-validated single-file unified diff through git apply. */
 export async function patchFileTool(filePath: string, unifiedDiff: string, rootDir: string): Promise<ToolResult> {
     let tempPatch: string | null = null;
     try {
@@ -157,70 +110,50 @@ export async function patchFileTool(filePath: string, unifiedDiff: string, rootD
 
         const gitProbe = spawnSync('git', ['--version'], { encoding: 'utf8', shell: false });
         if (gitProbe.status !== 0) {
-            return {
-                success: false,
-                output: '',
-                error: 'patch_file requires Git so patches can be context-validated with `git apply --check`. Install Git and retry.',
-            };
+            return { success: false, output: '', error: 'patch_file requires Git for context-validated writes.' };
         }
 
         const canonicalPatch = canonicalizeSingleFilePatch(filePath, unifiedDiff, rootDir);
         const original = fs.readFileSync(resolved, 'utf8');
         const beforeHash = sha256(original);
 
-        tempPatch = path.join(
-            os.tmpdir(),
-            `codebase-os-${process.pid}-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.patch`,
-        );
+        tempPatch = path.join(os.tmpdir(), `codebase-os-${process.pid}-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.patch`);
         fs.writeFileSync(tempPatch, canonicalPatch, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
 
         const commonArgs = ['apply', '--recount', '--whitespace=nowarn'];
         const check = spawnSync('git', [...commonArgs, '--check', tempPatch], {
-            cwd: path.resolve(rootDir),
-            encoding: 'utf8',
-            shell: false,
+            cwd: path.resolve(rootDir), encoding: 'utf8', shell: false,
         });
         if (check.status !== 0) {
             const detail = (check.stderr || check.stdout || 'patch context did not match').trim();
-            return {
-                success: false,
-                output: '',
-                error: `patch_file rejected before write: ${detail}`,
-            };
+            return { success: false, output: '', error: `patch_file rejected before write: ${detail}` };
         }
 
-        // Protect against a concurrent edit between preflight and apply.
-        const currentHash = sha256(fs.readFileSync(resolved, 'utf8'));
-        if (currentHash !== beforeHash) {
+        if (sha256(fs.readFileSync(resolved, 'utf8')) !== beforeHash) {
             return {
                 success: false,
                 output: '',
-                error: `patch_file rejected: ${filePath} changed after patch validation; re-read the file and regenerate the patch.`,
+                error: `patch_file rejected: ${filePath} changed after patch validation; re-read and regenerate the patch.`,
             };
         }
+        resolveWithinRoot(filePath, rootDir, filePath);
 
         const apply = spawnSync('git', [...commonArgs, tempPatch], {
-            cwd: path.resolve(rootDir),
-            encoding: 'utf8',
-            shell: false,
+            cwd: path.resolve(rootDir), encoding: 'utf8', shell: false,
         });
         if (apply.status !== 0) {
             const detail = (apply.stderr || apply.stdout || 'git apply failed').trim();
-            return { success: false, output: '', error: `patch_file failed without confirmation of a valid write: ${detail}` };
+            return { success: false, output: '', error: `patch_file failed: ${detail}` };
         }
 
         const updated = fs.readFileSync(resolved, 'utf8');
         const afterHash = sha256(updated);
-        if (afterHash === beforeHash) {
-            return { success: false, output: '', error: 'patch_file produced no content change' };
-        }
+        if (afterHash === beforeHash) return { success: false, output: '', error: 'patch_file produced no content change' };
 
         const { added, removed } = countPatchLines(canonicalPatch);
         return {
             success: true,
-            output:
-                `Patched: ${path.relative(rootDir, resolved)} (+${added} -${removed} lines, ` +
-                `sha256 ${beforeHash.slice(0, 12)} -> ${afterHash.slice(0, 12)})`,
+            output: `Patched: ${path.relative(rootDir, resolved)} (+${added} -${removed} lines, sha256 ${beforeHash.slice(0, 12)} -> ${afterHash.slice(0, 12)})`,
         };
     } catch (err) {
         return { success: false, output: '', error: String(err) };
@@ -235,19 +168,18 @@ export async function patchFileTool(filePath: string, unifiedDiff: string, rootD
 export async function deleteFileTool(filePath: string, rootDir: string): Promise<ToolResult> {
     try {
         const resolved = resolveWithinRoot(filePath, rootDir, filePath);
-        if (!fs.existsSync(resolved)) {
-            return { success: false, output: '', error: `File not found: ${filePath}` };
-        }
+        if (!fs.existsSync(resolved)) return { success: false, output: '', error: `File not found: ${filePath}` };
         if (path.resolve(resolved) === path.resolve(rootDir)) {
             return { success: false, output: '', error: 'Refusing to delete the project root.' };
         }
 
+        // Revalidate immediately before the destructive call.
+        resolveWithinRoot(filePath, rootDir, filePath);
         const stats = fs.lstatSync(resolved);
         if (stats.isDirectory()) {
             fs.rmSync(resolved, { recursive: true, force: false });
             return { success: true, output: `Deleted directory: ${path.relative(rootDir, resolved)}` };
         }
-
         fs.unlinkSync(resolved);
         return { success: true, output: `Deleted file: ${path.relative(rootDir, resolved)}` };
     } catch (err) {
@@ -255,30 +187,25 @@ export async function deleteFileTool(filePath: string, rootDir: string): Promise
     }
 }
 
-/** Moves or renames a file/directory within the project sandbox. */
+/** Moves or renames a path within the project sandbox. */
 export async function moveFileTool(oldPath: string, newPath: string, rootDir: string): Promise<ToolResult> {
     try {
         const resolvedOld = resolveWithinRoot(oldPath, rootDir, oldPath);
         const resolvedNew = resolveWithinRoot(newPath, rootDir, newPath);
-        if (!fs.existsSync(resolvedOld)) {
-            return { success: false, output: '', error: `Source not found: ${oldPath}` };
-        }
-        if (fs.existsSync(resolvedNew)) {
-            return { success: false, output: '', error: `Destination already exists: ${newPath}` };
-        }
+        if (!fs.existsSync(resolvedOld)) return { success: false, output: '', error: `Source not found: ${oldPath}` };
+        if (fs.existsSync(resolvedNew)) return { success: false, output: '', error: `Destination already exists: ${newPath}` };
 
         fs.mkdirSync(path.dirname(resolvedNew), { recursive: true });
+        resolveWithinRoot(oldPath, rootDir, oldPath);
+        resolveWithinRoot(newPath, rootDir, newPath);
         fs.renameSync(resolvedOld, resolvedNew);
-        return {
-            success: true,
-            output: `Moved ${path.relative(rootDir, resolvedOld)} -> ${path.relative(rootDir, resolvedNew)}`,
-        };
+        return { success: true, output: `Moved ${path.relative(rootDir, resolvedOld)} -> ${path.relative(rootDir, resolvedNew)}` };
     } catch (err) {
         return { success: false, output: '', error: String(err) };
     }
 }
 
-/** Lists files in a directory for the AI agent. */
+/** Lists files without following symlinked directories. */
 export async function listFilesTool(dirPath: string, rootDir: string): Promise<ToolResult> {
     try {
         const resolved = resolveWithinRoot(dirPath, rootDir, dirPath);
@@ -297,12 +224,9 @@ export async function listFilesTool(dirPath: string, rootDir: string): Promise<T
                 const full = path.join(dir, entry.name);
                 const display = path.relative(resolved, full);
                 files.push(`${entry.isDirectory() ? '[DIR]  ' : entry.isSymbolicLink() ? '[LINK] ' : '[FILE] '}${display}`);
-
-                // Never follow symlinked directories during recursive discovery.
                 if (entry.isDirectory() && !entry.isSymbolicLink()) walk(full, depth + 1);
             }
         };
-
         walk(resolved, 0);
         return { success: true, output: files.join('\n') };
     } catch (err) {
