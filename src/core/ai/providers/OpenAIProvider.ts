@@ -16,6 +16,11 @@ interface ResponsesApiPayload {
     status?: string;
 }
 
+interface ModelsApiPayload {
+    data?: Array<{ id?: string }>;
+    error?: { message?: string } | null;
+}
+
 export class OpenAIProvider implements AIProvider {
     readonly kind: AIProviderKind = 'openai';
     private client: OpenAI;
@@ -94,8 +99,21 @@ export class OpenAIProvider implements AIProvider {
     async listModels(): Promise<string[]> {
         if (!this.apiKey.trim()) return [];
         try {
-            const response = await this.client.models.list({} as any, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) } as any);
-            return (response?.data ?? []).map(model => model.id).filter(Boolean).sort();
+            const response = await fetch('https://api.openai.com/v1/models', {
+                method: 'GET',
+                headers: { Authorization: `Bearer ${this.apiKey}` },
+                signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+            });
+            const payload = await response.json() as ModelsApiPayload;
+            if (!response.ok) {
+                const error = new Error(payload.error?.message || `OpenAI Models API returned HTTP ${response.status}`) as Error & { status?: number };
+                error.status = response.status;
+                throw error;
+            }
+            return (payload.data ?? [])
+                .map(model => model.id)
+                .filter((id): id is string => typeof id === 'string' && id.length > 0)
+                .sort();
         } catch (err) {
             const classified = classifyProviderError(err, 'openai-models');
             logger.warn('OpenAI model discovery failed', { code: classified.code, error: classified.message });
