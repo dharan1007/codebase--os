@@ -1,4 +1,4 @@
-commit=281f058dd1bb8750b9cdcfdded146e7eb71544fb
+commit=eea023d4ea55ac60051701c6fa84079c6a1e2d11
 node=v20.20.2
 npm=10.8.2
 npm_ci_exit=0
@@ -9,43 +9,116 @@ pack_exit=0
 npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
 npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
 
-added 277 packages, and audited 278 packages in 9s
+added 277 packages, and audited 278 packages in 13s
 
 42 packages are looking for funding
   run `npm fund` for details
 
 found 0 vulnerabilities
+--- failing test excerpts ---
+30-# 5:29:02 AM ● [INFO] Applying database migration
+31-# Subtest: Database migrates legacy change_records without deleting existing rows
+32-ok 3 - Database migrates legacy change_records without deleting existing rows
+33-  ---
+34-  duration_ms: 63.675854
+35-  ...
+36-# 5:29:02 AM ⚠ [WARN] EmbeddingIndex: configured provider has no embedding capability.
+37-# Subtest: hybrid retrieval retains a lexical arm when provider has no embedding API
+38:not ok 4 - hybrid retrieval retains a lexical arm when provider has no embedding API
+39-  ---
+40-  duration_ms: 53.786155
+41-  location: '/home/runner/work/codebase--os/codebase--os/tests/hybrid-retrieval.test.cjs:9:1'
+42-  failureType: 'testCodeFailure'
+43-  error: |-
+44-    Expected values to be strictly equal:
+45-    
+46-    0 !== 1
+47-    
+48-  code: 'ERR_ASSERTION'
+49-  name: 'AssertionError'
+50-  expected: 1
+51-  actual: 0
+52-  operator: 'strictEqual'
+53-  stack: |-
+54-    TestContext.<anonymous> (/home/runner/work/codebase--os/codebase--os/tests/hybrid-retrieval.test.cjs:37:10)
+55-    async Test.run (node:internal/test_runner/test:797:9)
+56-    async Test.processPendingSubtests (node:internal/test_runner/test:526:7)
+57-  ...
+58-# 5:29:02 AM ● [INFO] [SERVER] Visual UI listening on loopback at http://127.0.0.1:44313
+59-# [36m[DASHBOARD][0m Codebase OS live at [4mhttp://127.0.0.1:44313[0m
+60-# Subtest: LocalServer serves API locally and blocks cross-origin mutation/path traversal
+61:not ok 5 - LocalServer serves API locally and blocks cross-origin mutation/path traversal
+62-  ---
+63-  duration_ms: 106.267275
+64-  location: '/home/runner/work/codebase--os/codebase--os/tests/local-server.test.cjs:6:1'
+65-  failureType: 'testCodeFailure'
+66-  error: |-
+67-    Expected values to be strictly equal:
+68-    
+69-    404 !== 403
+70-    
+71-  code: 'ERR_ASSERTION'
+72-  name: 'AssertionError'
+73-  expected: 403
+74-  actual: 404
+75-  operator: 'strictEqual'
+76-  stack: |-
+77-    TestContext.<anonymous> (/home/runner/work/codebase--os/codebase--os/tests/local-server.test.cjs:33:10)
+78-    process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+79-    async Test.run (node:internal/test_runner/test:797:9)
+80-    async Test.processPendingSubtests (node:internal/test_runner/test:526:7)
+81-  ...
 --- verify tail ---
+  ---
+  duration_ms: 8.257371
+  ...
+# 5:29:02 AM ● [INFO] ProviderRegistry: initialized openai
+# 5:29:02 AM ● [INFO] ProviderRegistry: initialized openai
+# 5:29:02 AM ● [INFO] ProviderRegistry: initialized openai
+# Subtest: ProviderRegistry reuses the same provider/model instance
+ok 10 - ProviderRegistry reuses the same provider/model instance
+  ---
+  duration_ms: 35.820578
+  ...
+# Subtest: ProviderRegistry does not reuse a provider configured for a different model
+ok 11 - ProviderRegistry does not reuse a provider configured for a different model
+  ---
+  duration_ms: 0.886393
+  ...
+# Subtest: SessionMemory reads recurring failures from failure_snapshots
+ok 12 - SessionMemory reads recurring failures from failure_snapshots
+  ---
+  duration_ms: 24.747205
   ...
 # Subtest: orders imported dependencies before consumers
 ok 13 - orders imported dependencies before consumers
   ---
-  duration_ms: 3.186765
+  duration_ms: 3.440807
   ...
 # Subtest: does not treat provides edges as dependency ordering edges
 ok 14 - does not treat provides edges as dependency ordering edges
   ---
-  duration_ms: 0.383948
+  duration_ms: 0.371082
   ...
 # Subtest: surfaces dependency cycles instead of presenting them as valid topology
 ok 15 - surfaces dependency cycles instead of presenting them as valid topology
   ---
-  duration_ms: 0.663049
+  duration_ms: 0.684908
   ...
 # Subtest: discovers repository gates and requires all of them to pass
 ok 16 - discovers repository gates and requires all of them to pass
   ---
-  duration_ms: 11.846768
+  duration_ms: 12.754939
   ...
 # Subtest: fails closed when a discovered gate fails
 ok 17 - fails closed when a discovered gate fails
   ---
-  duration_ms: 1.560567
+  duration_ms: 1.819693
   ...
 # Subtest: fails closed when code changed but no executable verification strategy exists
 ok 18 - fails closed when code changed but no executable verification strategy exists
   ---
-  duration_ms: 0.942752
+  duration_ms: 1.017969
   ...
 1..18
 # tests 18
@@ -55,7 +128,7 @@ ok 18 - fails closed when code changed but no executable verification strategy e
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 700.40057
+# duration_ms 732.523851
 --- audit tail ---
 found 0 vulnerabilities
 --- pack tail ---
