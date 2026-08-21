@@ -1,6 +1,5 @@
 import { Command } from 'commander';
 import path from 'path';
-import fs from 'fs';
 import chalk from 'chalk';
 import { loadContext } from '../context.js';
 import { FileWatcher } from '../../core/watcher/FileWatcher.js';
@@ -14,9 +13,8 @@ import { normalizePath } from '../../utils/paths.js';
 
 export function watchCommand(): Command {
     return new Command('watch')
-        .description('Watch for file changes and analyze impact in real-time')
-        .option('--auto-apply', 'Automatically apply AI-suggested fixes (dangerous)')
-        .action(async (opts: any) => {
+        .description('Read-only watch mode: refresh graph state and report impact when files change')
+        .action(async () => {
             const ctx = await loadContext();
             if (!ctx) return;
 
@@ -25,75 +23,81 @@ export function watchCommand(): Command {
             const scanner = new ProjectScanner(config.rootDir, graph, config, db);
             const analyzer = new ImpactAnalyzer(graph, tsAnalyzer, db);
 
-            console.log(chalk.bold('\nCodebase OS — Watch Mode'));
-            console.log(chalk.gray('─'.repeat(50)));
-            console.log(`  Project: ${chalk.cyan(config.name)}`);
-            console.log(`  Provider: ${chalk.cyan(config.ai.provider)}`);
+            console.log(chalk.bold('\nCodebase OS — Read-Only Watch Mode'));
+            console.log(chalk.gray('─'.repeat(56)));
+            console.log(`  Project:      ${chalk.cyan(config.name)}`);
             console.log(`  Auto-analyze: ${chalk.cyan(String(config.watch.autoAnalyze))}`);
-            console.log(`  Auto-apply: ${chalk.cyan(String(opts.autoApply || config.watch.autoApply))}`);
-            console.log(chalk.gray('─'.repeat(50)));
+            console.log(`  Mutation:     ${chalk.gray('disabled; use cos propagate for verified downstream changes')}`);
+            console.log(chalk.gray('─'.repeat(56)));
             console.log(chalk.gray('\nWatching for changes... (Ctrl+C to stop)\n'));
 
             const watcher = new FileWatcher(config);
-
             watcher.start(async (change: FileChange) => {
                 const normalizedPath = normalizePath(change.filePath);
                 change.filePath = normalizedPath;
-                
+
                 const relPath = path.relative(config.rootDir, normalizedPath).replace(/\\/g, '/');
-                const colors: Record<string, chalk.Chalk> = { 
-                    added: chalk.green, 
-                    deleted: chalk.red, 
+                const colors: Record<string, chalk.Chalk> = {
+                    added: chalk.green,
+                    deleted: chalk.red,
                     modified: chalk.cyan,
-                    renamed: chalk.yellow 
+                    renamed: chalk.yellow,
+                    moved: chalk.yellow,
                 };
                 const color = colors[change.changeType] || chalk.blue;
-                
-                console.log(chalk.gray(`[${new Date().toLocaleTimeString()}] `) + 
-                    color(`${change.changeType.toUpperCase()}`) + ` ${relPath}`);
+                console.log(
+                    chalk.gray(`[${new Date().toLocaleTimeString()}] `) +
+                    color(change.changeType.toUpperCase()) +
+                    ` ${relPath}`,
+                );
 
                 try {
                     await scanner.scanFile(change.filePath);
                 } catch (err) {
-                    logger.debug('Re-scan failed', { file: change.filePath, error: String(err) });
+                    logger.warn('Watch graph refresh failed', { file: change.filePath, error: String(err) });
+                    console.log(chalk.red(`  Graph refresh failed: ${String(err)}`));
+                    return;
                 }
 
                 if (!config.watch.autoAnalyze) return;
 
                 try {
                     const report = analyzer.analyze(change);
-                    
-                    if (report.impactedNodes.length === 0 && report.crossLayerIssues.length === 0) {
-                        return;
-                    }
+                    if (report.impactedNodes.length === 0 && report.crossLayerIssues.length === 0) return;
 
-                    // For watch mode, we show a simplified impact summary
-                    const sevColor = RichFormatter.severityColor(report.severity);
-                    console.log(`  ${sevColor(`● ${report.severity.toUpperCase()}`)} — ${report.impactedNodes.length} nodes affected | Layers: ${report.affectedLayers.join(', ')}`);
-                    
-                    if (report.impactedNodes.length > 0) {
-                        const topImpact = report.impactedNodes
-                            .filter(n => ['breaking', 'major'].includes(n.severity))
-                            .slice(0, 3);
-                        
-                        for (const node of topImpact) {
-                            console.log(chalk.gray(`    → ${node.node.name} (${node.node.kind}): ${node.suggestedAction ?? node.reason}`));
-                        }
+                    const severity = RichFormatter.severityColor(report.severity);
+                    console.log(
+                        `  ${severity(report.severity.toUpperCase())} — ` +
+                        `${report.impactedNodes.length} nodes affected | Layers: ${report.affectedLayers.join(', ')}`,
+                    );
+
+                    for (const impacted of report.impactedNodes
+                        .filter(node => ['breaking', 'major'].includes(node.severity))
+                        .slice(0, 5)) {
+                        console.log(
+                            chalk.gray(
+                                `    ${impacted.node.name} (${impacted.node.kind}): ` +
+                                `${impacted.suggestedAction ?? impacted.reason}`,
+                            ),
+                        );
                     }
 
                     if (report.crossLayerIssues.length > 0) {
-                        console.log(chalk.yellow(`  ⚠ ${report.crossLayerIssues.length} synchronization issues detected. Run 'cos sync' for details.`));
+                        console.log(chalk.yellow(
+                            `  ${report.crossLayerIssues.length} cross-layer issue(s) detected. Run cos sync for details.`,
+                        ));
                     }
                     console.log('');
                 } catch (err) {
-                    logger.debug('Analysis failed', { file: change.filePath, error: String(err) });
+                    logger.warn('Watch impact analysis failed', { file: change.filePath, error: String(err) });
+                    console.log(chalk.yellow(`  Impact analysis unavailable: ${String(err)}`));
                 }
             });
 
-            process.on('SIGINT', () => {
-                console.log(chalk.yellow('\n\nStopping watcher...'));
+            process.once('SIGINT', () => {
+                console.log(chalk.yellow('\nStopping watcher...'));
                 watcher.stop();
-                process.exit(0);
+                process.exitCode = 130;
             });
         });
 }

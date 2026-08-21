@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f4f3ef" />
+  <meta name="description" content="Codebase OS is a verified software-change runtime for AI engineering: inspect the graph, plan the blast radius, apply transactional changes, and independently verify the result." />
+  <meta property="og:title" content="Codebase OS — Verified software changes" />
+  <meta property="og:description" content="A software-change runtime built around graph intelligence, transactional mutation, independent verification, persistent engineering memory, and provider failover." />
+  <meta property="og:type" content="website" />
+  <title>Codebase OS — Verified software changes</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Codebase OS home">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span>Codebase OS</span>
+    </a>
+    <nav class="nav" aria-label="Primary navigation">
+      <a href="#runtime">Runtime</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#security">Security</a>
+      <a class="nav-cta" href="https://github.com/dharan1007/codebase--os/tree/agent/production-hardening" target="_blank" rel="noreferrer">GitHub ↗</a>
+    </nav>
+    <button class="menu-button" type="button" aria-expanded="false" aria-controls="mobile-nav" aria-label="Toggle navigation">
+      <span></span><span></span>
+    </button>
+  </header>
+
+  <div id="mobile-nav" class="mobile-nav" hidden>
+    <a href="#runtime">Runtime</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#security">Security</a>
+    <a href="https://github.com/dharan1007/codebase--os/tree/agent/production-hardening" target="_blank" rel="noreferrer">GitHub ↗</a>
+  </div>
+
+  <main id="main">
+    <section id="top" class="hero section-shell">
+      <div class="hero-kicker reveal">
+        <span class="status-dot" aria-hidden="true"></span>
+        Verified software-change runtime
+      </div>
+      <h1 class="hero-title reveal">Change code with<br /><em>evidence, not hope.</em></h1>
+      <div class="hero-lower reveal">
+        <p class="hero-copy">Codebase OS gives AI engineering a runtime around the model: repository graph intelligence, transactional mutations, independent verification, persistent engineering memory, and provider failover.</p>
+        <div class="hero-actions">
+          <a class="button button-dark" href="https://github.com/dharan1007/codebase--os/tree/agent/production-hardening" target="_blank" rel="noreferrer">View source <span>↗</span></a>
+          <a class="button button-ghost" href="#runtime">See the runtime <span>↓</span></a>
+        </div>
+      </div>
+
+      <div class="trace-card reveal" aria-label="Codebase OS execution model">
+        <div class="trace-topbar">
+          <div class="trace-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+          <span class="trace-label">cos agent</span>
+          <span class="trace-state">runtime controlled</span>
+        </div>
+        <div class="trace-grid">
+          <div class="trace-steps" role="list">
+            <button class="trace-step active" data-trace="scan" role="listitem">
+              <span>01</span><strong>Inspect</strong><small>Build code + dependency context</small>
+            </button>
+            <button class="trace-step" data-trace="plan" role="listitem">
+              <span>02</span><strong>Plan</strong><small>Order by blast radius + topology</small>
+            </button>
+            <button class="trace-step" data-trace="change" role="listitem">
+              <span>03</span><strong>Change</strong><small>Apply context-validated mutation</small>
+            </button>
+            <button class="trace-step" data-trace="verify" role="listitem">
+              <span>04</span><strong>Verify</strong><small>Run independent repository gates</small>
+            </button>
+          </div>
+          <div class="trace-output" aria-live="polite">
+            <div class="trace-meta"><span id="trace-command">cos scan</span><span id="trace-duration">graph ready</span></div>
+            <pre id="trace-content"><code><span class="muted">graph</span>  repository structure indexed
+<span class="muted">scope</span>  dependency relationships mapped
+<span class="good">ready</span>  planning context available</code></pre>
+            <div class="trace-footer"><span>Runtime owns the completion decision.</span><span class="trace-pulse"><i></i> evidence path</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="signal-strip" aria-label="Core principles">
+      <div class="marquee-track">
+        <span>TRANSACTIONAL MUTATION</span><i>×</i><span>INDEPENDENT VERIFICATION</span><i>×</i><span>GRAPH INTELLIGENCE</span><i>×</i><span>PERSISTENT MEMORY</span><i>×</i><span>MULTI-PROVIDER FAILOVER</span>
+      </div>
+    </section>
+
+    <section id="runtime" class="section-shell runtime-section">
+      <div class="section-head reveal">
+        <p class="eyebrow">01 / Runtime</p>
+        <h2>The model proposes.<br />The runtime decides.</h2>
+        <p>Codebase OS is designed so a language model is one component in a controlled engineering loop—not the authority that decides whether its own work succeeded.</p>
+      </div>
+
+      <div class="feature-stack">
+        <article class="feature-row reveal">
+          <div class="feature-index">01</div>
+          <div class="feature-copy"><h3>Repository graph before generation</h3><p>Imports, calls, symbols, API contracts and persisted file analysis give planning a structural view of the codebase before a change is attempted.</p></div>
+          <div class="feature-visual graph-visual" aria-hidden="true">
+            <span class="node n1"></span><span class="node n2"></span><span class="node n3"></span><span class="node n4"></span><span class="node n5"></span>
+            <svg viewBox="0 0 260 120" preserveAspectRatio="none"><path d="M30 70 C75 30 95 35 130 60 S195 100 230 45"/><path d="M31 70 C80 95 118 90 160 73 S205 48 230 45"/><path d="M130 60 L160 73"/></svg>
+          </div>
+        </article>
+
+        <article class="feature-row reveal">
+          <div class="feature-index">02</div>
+          <div class="feature-copy"><h3>Transactional change history</h3><p>File mutations are context-validated, recorded durably, and compensated if persistence fails. Rollback refuses to overwrite work that changed after the transaction.</p></div>
+          <div class="feature-visual diff-visual" aria-hidden="true"><div><b>−</b><span>direct filesystem write</span></div><div><b>+</b><span>validated patch + durable record</span></div><div><b>+</b><span>conflict-aware rollback</span></div></div>
+        </article>
+
+        <article class="feature-row reveal">
+          <div class="feature-index">03</div>
+          <div class="feature-copy"><h3>Independent verification</h3><p>The agent cannot make a mutation and simply declare success. The runtime discovers project gates—types, lint, tests, builds and supported language checks—and rejects completion when evidence fails.</p></div>
+          <div class="feature-visual verify-visual" aria-hidden="true"><div><span>typecheck</span><b>gate</b></div><div><span>tests</span><b>gate</b></div><div><span>build</span><b>gate</b></div><div class="verify-final"><span>completion</span><b>evidence required</b></div></div>
+        </article>
+      </div>
+    </section>
+
+    <section id="architecture" class="architecture-section">
+      <div class="section-shell">
+        <div class="section-head light reveal">
+          <p class="eyebrow">02 / Architecture</p>
+          <h2>More runtime.<br />Less prompt theater.</h2>
+          <p>Capabilities are built as inspectable subsystems with deterministic boundaries around retrieval, planning, mutation, verification and recovery.</p>
+        </div>
+
+        <div class="architecture-grid">
+          <article class="architecture-card reveal"><span class="card-number">A</span><h3>Hybrid retrieval</h3><p>Lexical search remains available without embeddings; vector retrieval adds semantic ranking when the provider supports it.</p><div class="card-tag">LEXICAL + VECTOR</div></article>
+          <article class="architecture-card reveal"><span class="card-number">B</span><h3>Cross-layer contracts</h3><p>Scans frontend API calls, API endpoints, Prisma schemas and SQL table definitions to surface contract drift across layers.</p><div class="card-tag">API + SCHEMA</div></article>
+          <article class="architecture-card reveal"><span class="card-number">C</span><h3>Provider resilience</h3><p>OpenAI, Anthropic, Gemini, OpenRouter and Ollama can participate in bounded routing with explicit outage and quota failure states.</p><div class="card-tag">FAILOVER</div></article>
+          <article class="architecture-card reveal"><span class="card-number">D</span><h3>Engineering memory</h3><p>SQLite-backed checkpoints, changes and recurring failures preserve evidence across sessions without relying on chat history alone.</p><div class="card-tag">DURABLE STATE</div></article>
+          <article class="architecture-card reveal"><span class="card-number">E</span><h3>Sandboxed execution</h3><p>Shell work runs in an isolated execution path with bounded resources and credential-aware project mounts.</p><div class="card-tag">CONTROLLED TOOLS</div></article>
+          <article class="architecture-card reveal"><span class="card-number">F</span><h3>Risk-aware mutation</h3><p>Change risk uses file semantics, content patterns, dependency centrality, change size and observed agent context before apply.</p><div class="card-tag">POLICY ENGINE</div></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="security" class="section-shell security-section">
+      <div class="security-layout">
+        <div class="section-head reveal">
+          <p class="eyebrow">03 / Security</p>
+          <h2>Assume the repository can be hostile.</h2>
+          <p>Repository tools enforce root containment, realpath checks and sensitive-path policy. Native AI file reads deny common secret-bearing files instead of trusting the model to avoid them.</p>
+        </div>
+        <div class="boundary reveal">
+          <div class="boundary-title"><span>PROJECT BOUNDARY</span><span>ENFORCED</span></div>
+          <div class="boundary-row"><span>Path traversal</span><b>blocked</b></div>
+          <div class="boundary-row"><span>Symlink escape</span><b>blocked</b></div>
+          <div class="boundary-row"><span>.env / private keys</span><b>AI read denied</b></div>
+          <div class="boundary-row"><span>Shell argument injection</span><b>no shell interpolation</b></div>
+          <div class="boundary-row"><span>Stale rollback</span><b>conflict refused</b></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="workflow-section">
+      <div class="section-shell workflow-shell">
+        <p class="eyebrow reveal">04 / Source</p>
+        <div class="workflow-command reveal">
+          <span>$</span><code>git clone -b agent/production-hardening https://github.com/dharan1007/codebase--os.git</code><button type="button" data-copy="git clone -b agent/production-hardening https://github.com/dharan1007/codebase--os.git" aria-label="Copy clone command">copy</button>
+        </div>
+        <div class="workflow-grid">
+          <div class="workflow-item reveal"><span>1</span><div><b>npm ci</b><p>Install the locked dependency graph.</p></div></div>
+          <div class="workflow-item reveal"><span>2</span><div><b>npm run verify</b><p>Run typecheck, build and tests.</p></div></div>
+          <div class="workflow-item reveal"><span>3</span><div><b>cos scan</b><p>Build durable codebase context.</p></div></div>
+          <div class="workflow-item reveal"><span>4</span><div><b>cos ask</b><p>Run the controlled agent loop.</p></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="final-cta section-shell reveal">
+      <p class="eyebrow">Open source / production-hardening branch</p>
+      <h2>Put a runtime<br />around the model.</h2>
+      <p>Inspect the implementation, run the tests, challenge the claims.</p>
+      <a class="button button-dark button-large" href="https://github.com/dharan1007/codebase--os/tree/agent/production-hardening" target="_blank" rel="noreferrer">Open the repository <span>↗</span></a>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div><a class="brand footer-brand" href="#top"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>Codebase OS</span></a><p>Verified software-change runtime for AI engineering.</p></div>
+    <div class="footer-links"><a href="https://github.com/dharan1007/codebase--os" target="_blank" rel="noreferrer">GitHub ↗</a><a href="#architecture">Architecture</a><a href="#security">Security</a></div>
+    <p class="footer-meta">Built to be measured, not merely claimed.</p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,85 @@
+name: Post-remediation verification
+
+# Emit focused failure excerpts for the repository audit.
+on:
+  push:
+    branches:
+      - agent/production-hardening
+    paths:
+      - .github/workflows/post-remediation-verify.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: agent/production-hardening
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Run full post-remediation verification and record evidence
+        shell: bash
+        run: |
+          set +e
+          npm ci > /tmp/npm-ci.log 2>&1
+          CI_EXIT=$?
+
+          VERIFY_EXIT=99
+          if [ "$CI_EXIT" -eq 0 ]; then
+            npm run verify > /tmp/verify.log 2>&1
+            VERIFY_EXIT=$?
+          else
+            printf '%s\n' 'Skipped because npm ci failed.' > /tmp/verify.log
+          fi
+
+          AUDIT_EXIT=99
+          if [ "$CI_EXIT" -eq 0 ]; then
+            npm audit --omit=dev --audit-level=high > /tmp/audit.log 2>&1
+            AUDIT_EXIT=$?
+          else
+            printf '%s\n' 'Skipped because npm ci failed.' > /tmp/audit.log
+          fi
+
+          PACK_EXIT=99
+          if [ "$CI_EXIT" -eq 0 ]; then
+            npm pack --dry-run > /tmp/pack.log 2>&1
+            PACK_EXIT=$?
+          else
+            printf '%s\n' 'Skipped because npm ci failed.' > /tmp/pack.log
+          fi
+
+          {
+            echo "commit=$(git rev-parse HEAD)"
+            echo "node=$(node --version)"
+            echo "npm=$(npm --version)"
+            echo "npm_ci_exit=$CI_EXIT"
+            echo "verify_exit=$VERIFY_EXIT"
+            echo "audit_exit=$AUDIT_EXIT"
+            echo "pack_exit=$PACK_EXIT"
+            echo "--- npm ci tail ---"
+            tail -n 20 /tmp/npm-ci.log
+            echo "--- failing test excerpts ---"
+            grep -n -B 8 -A 20 '^not ok' /tmp/verify.log || true
+            echo "--- verify tail ---"
+            tail -n 60 /tmp/verify.log
+            echo "--- audit tail ---"
+            tail -n 30 /tmp/audit.log
+            echo "--- pack tail ---"
+            tail -n 20 /tmp/pack.log
+          } > .post-remediation-verification.txt
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .post-remediation-verification.txt
+          git commit -m "chore: record post-remediation verification evidence"
+          git push origin HEAD:agent/production-hardening

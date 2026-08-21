@@ -1,24 +1,35 @@
-import { exec, spawn } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import which from 'which';
-import type { ProjectConfig } from '../../types/index.js';
 import { logger } from '../../utils/logger.js';
 
-const execAsync = promisify(exec);
-
 export type PackageManager = 'npm' | 'yarn' | 'pnpm' | 'bun';
+
+export interface DependencyStatus {
+    success: boolean;
+    packageManager: PackageManager;
+    packageManagerAvailable: boolean;
+    manifestPresent: boolean;
+    installPresent: boolean;
+    missing: string[];
+    error?: string;
+}
+
+interface ProcessResult {
+    success: boolean;
+    output: string;
+    error?: string;
+}
 
 export class DependencyManager {
     private packageManager: PackageManager | null = null;
 
-    constructor(private rootDir: string) { }
+    constructor(private rootDir: string) {}
 
     async detectPackageManager(): Promise<PackageManager> {
         if (this.packageManager) return this.packageManager;
-
-        if (fs.existsSync(path.join(this.rootDir, 'bun.lockb'))) {
+        if (fs.existsSync(path.join(this.rootDir, 'bun.lockb')) || fs.existsSync(path.join(this.rootDir, 'bun.lock'))) {
             this.packageManager = 'bun';
         } else if (fs.existsSync(path.join(this.rootDir, 'pnpm-lock.yaml'))) {
             this.packageManager = 'pnpm';
@@ -27,7 +38,6 @@ export class DependencyManager {
         } else {
             this.packageManager = 'npm';
         }
-
         logger.debug('Detected package manager', { pm: this.packageManager });
         return this.packageManager;
     }
@@ -41,83 +51,122 @@ export class DependencyManager {
         }
     }
 
-    async install(missingPackages?: string[]): Promise<{ success: boolean; output: string; error?: string }> {
+    /** Read-only dependency health check. Never installs or modifies a lockfile. */
+    async check(): Promise<DependencyStatus> {
         const pm = await this.detectPackageManager();
-        const available = await this.isPackageManagerAvailable(pm);
+        const packageManagerAvailable = await this.isPackageManagerAvailable(pm);
+        const manifestPresent = fs.existsSync(path.join(this.rootDir, 'package.json'));
+        const installPresent = fs.existsSync(path.join(this.rootDir, 'node_modules'));
+        const missing: string[] = [];
 
-        if (!available) {
+        if (!manifestPresent) {
+            return {
+                success: true,
+                packageManager: pm,
+                packageManagerAvailable,
+                manifestPresent: false,
+                installPresent: false,
+                missing,
+            };
+        }
+        if (!packageManagerAvailable) missing.push(`package manager: ${pm}`);
+        if (!installPresent) missing.push('node_modules');
+
+        return {
+            success: packageManagerAvailable && installPresent,
+            packageManager: pm,
+            packageManagerAvailable,
+            manifestPresent,
+            installPresent,
+            missing,
+            error: missing.length > 0 ? `Dependency environment incomplete: ${missing.join(', ')}` : undefined,
+        };
+    }
+
+    /** Explicit dependency mutation. Callers must opt in to this method. */
+    async install(missingPackages?: string[]): Promise<ProcessResult> {
+        const pm = await this.detectPackageManager();
+        if (!await this.isPackageManagerAvailable(pm)) {
             return { success: false, output: '', error: `Package manager '${pm}' not found in PATH` };
         }
 
-        let command: string;
-        if (missingPackages && missingPackages.length > 0) {
-            const pkgList = missingPackages.join(' ');
-            switch (pm) {
-                case 'npm': command = `npm install ${pkgList}`; break;
-                case 'yarn': command = `yarn add ${pkgList}`; break;
-                case 'pnpm': command = `pnpm add ${pkgList}`; break;
-                case 'bun': command = `bun add ${pkgList}`; break;
+        let args: string[];
+        if (missingPackages?.length) {
+            const packages = missingPackages.filter(value => value.trim().length > 0);
+            if (packages.length !== missingPackages.length) {
+                return { success: false, output: '', error: 'Invalid empty package specification.' };
             }
+            args = pm === 'npm' ? ['install', '--', ...packages] : ['add', ...packages];
         } else {
-            switch (pm) {
-                case 'npm': command = 'npm install'; break;
-                case 'yarn': command = 'yarn install'; break;
-                case 'pnpm': command = 'pnpm install'; break;
-                case 'bun': command = 'bun install'; break;
-            }
+            // Prefer lockfile-respecting commands when they are available.
+            if (pm === 'npm' && fs.existsSync(path.join(this.rootDir, 'package-lock.json'))) args = ['ci'];
+            else if (pm === 'pnpm' && fs.existsSync(path.join(this.rootDir, 'pnpm-lock.yaml'))) args = ['install', '--frozen-lockfile'];
+            else if (pm === 'yarn' && fs.existsSync(path.join(this.rootDir, 'yarn.lock'))) args = ['install', '--immutable'];
+            else if (pm === 'bun' && (fs.existsSync(path.join(this.rootDir, 'bun.lock')) || fs.existsSync(path.join(this.rootDir, 'bun.lockb')))) args = ['install', '--frozen-lockfile'];
+            else args = ['install'];
         }
-
-        return new Promise(resolve => {
-            logger.info(`Running: ${command}`);
-            const proc = spawn(command, { shell: true, cwd: this.rootDir });
-            const output: string[] = [];
-            const errOutput: string[] = [];
-
-            proc.stdout?.on('data', (d: Buffer) => output.push(d.toString()));
-            proc.stderr?.on('data', (d: Buffer) => errOutput.push(d.toString()));
-
-            proc.on('close', code => {
-                if (code === 0) {
-                    resolve({ success: true, output: output.join('') });
-                } else {
-                    resolve({ success: false, output: output.join(''), error: errOutput.join('') });
-                }
-            });
-        });
+        return this.run(pm, args, 10 * 60_000);
     }
 
-    async installPythonDeps(): Promise<{ success: boolean; output: string; error?: string }> {
+    async installPythonDeps(): Promise<ProcessResult> {
         const reqPath = path.join(this.rootDir, 'requirements.txt');
-        if (!fs.existsSync(reqPath)) {
-            return { success: true, output: 'No requirements.txt found' };
-        }
-
-        try {
-            const { stdout, stderr } = await execAsync('pip install -r requirements.txt', {
-                cwd: this.rootDir,
-                timeout: 120000,
-            });
-            return { success: true, output: stdout };
-        } catch (err) {
-            return { success: false, output: '', error: String(err) };
-        }
+        if (!fs.existsSync(reqPath)) return { success: true, output: 'No requirements.txt found' };
+        const python = process.env['PYTHON'] || (process.platform === 'win32' ? 'python.exe' : 'python3');
+        return this.run(python, ['-m', 'pip', 'install', '-r', 'requirements.txt'], 10 * 60_000);
     }
 
     async getOutdatedPackages(): Promise<Array<{ name: string; current: string; latest: string }>> {
         const pm = await this.detectPackageManager();
+        if (!await this.isPackageManagerAvailable(pm)) return [];
+        const result = await this.run(pm, ['outdated', '--json'], 30_000, true);
+        const raw = result.output.trim();
+        if (!raw) return [];
         try {
-            const { stdout } = await execAsync(
-                pm === 'npm' ? 'npm outdated --json' : `${pm} outdated --json`,
-                { cwd: this.rootDir, timeout: 30000 }
-            );
-            const parsed = JSON.parse(stdout) as Record<string, { current: string; latest: string }>;
-            return Object.entries(parsed).map(([name, info]) => ({
-                name,
-                current: info.current,
-                latest: info.latest,
-            }));
+            const parsed = JSON.parse(raw) as Record<string, { current?: string; latest?: string }>;
+            return Object.entries(parsed)
+                .filter(([, info]) => Boolean(info.current && info.latest))
+                .map(([name, info]) => ({ name, current: info.current!, latest: info.latest! }));
         } catch {
             return [];
         }
+    }
+
+    private run(command: string, args: string[], timeoutMs: number, acceptNonZero = false): Promise<ProcessResult> {
+        return new Promise(resolve => {
+            logger.info('Running dependency command', { command, args });
+            const proc = spawn(command, args, {
+                cwd: this.rootDir,
+                shell: false,
+                stdio: ['ignore', 'pipe', 'pipe'],
+                windowsHide: true,
+                env: process.env,
+            });
+            const stdout: Buffer[] = [];
+            const stderr: Buffer[] = [];
+            let settled = false;
+            proc.stdout.on('data', (data: Buffer) => stdout.push(data));
+            proc.stderr.on('data', (data: Buffer) => stderr.push(data));
+
+            const timer = setTimeout(() => {
+                if (!settled) proc.kill('SIGTERM');
+            }, timeoutMs);
+            timer.unref();
+
+            proc.once('error', err => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                resolve({ success: false, output: Buffer.concat(stdout).toString('utf8'), error: err.message });
+            });
+            proc.once('close', code => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                const output = Buffer.concat(stdout).toString('utf8');
+                const error = Buffer.concat(stderr).toString('utf8');
+                const ok = code === 0 || acceptNonZero;
+                resolve({ success: ok, output, error: ok ? undefined : error || `Process exited with ${code}` });
+            });
+        });
     }
 }

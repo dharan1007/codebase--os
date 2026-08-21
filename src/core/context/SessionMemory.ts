@@ -17,27 +17,14 @@ export interface ProjectMemory {
 }
 
 /**
- * SessionMemory — the second major differentiator of Codebase OS.
- *
- * Claude Code, Codex, and Cursor start every session completely blank.
- * They have NO memory of what was done in previous sessions.
- *
- * SessionMemory reads the persistent SQLite change_records table and
- * reconstructs a structured "project memory" context block that is
- * injected into the agent's initial prompt at the start of every run.
- *
- * This gives Codebase OS genuine multi-session intelligence:
- * - What files have been most frequently modified
- * - What zones of the codebase keep generating failures (and why)
- * - What was accomplished in the last N sessions
- * - What the agent should NOT repeat (known failure patterns)
+ * Reconstructs project-scoped engineering memory from durable change and
+ * failure records. This is evidence-backed memory, not raw chat history.
  */
 export class SessionMemory {
     constructor(private db: Database, private rootDir: string) {}
 
     load(lastNSessions = 5): ProjectMemory {
         try {
-            // Query recent change records, grouped by session
             let rows: any[] = [];
             try {
                 rows = this.db.prepare(`
@@ -48,61 +35,64 @@ export class SessionMemory {
                     LIMIT 300
                 `).all() as any[];
             } catch {
-                // Table might not exist yet on a fresh project
                 return this.empty();
             }
 
-            if (rows.length === 0) return this.empty();
-
-            // Group by session
             const sessionMap = new Map<string, PastSession>();
+            const fileFreq = new Map<string, number>();
+
             for (const row of rows) {
                 const relPath = path.relative(this.rootDir, row.file_path).replace(/\\/g, '/');
-                if (!sessionMap.has(row.session_id)) {
-                    sessionMap.set(row.session_id, {
-                        sessionId: row.session_id,
-                        filesModified: [],
-                        changeCount: 0,
-                        appliedAt: row.applied_at,
-                    });
-                }
-                const s = sessionMap.get(row.session_id)!;
-                if (!s.filesModified.includes(relPath)) s.filesModified.push(relPath);
-                s.changeCount++;
+                const session: PastSession = sessionMap.get(row.session_id) ?? {
+                    sessionId: String(row.session_id),
+                    filesModified: [],
+                    changeCount: 0,
+                    appliedAt: Number(row.applied_at) || 0,
+                };
+                if (!session.filesModified.includes(relPath)) session.filesModified.push(relPath);
+                session.changeCount++;
+                session.appliedAt = Math.max(session.appliedAt, Number(row.applied_at) || 0);
+                sessionMap.set(session.sessionId, session);
+                fileFreq.set(relPath, (fileFreq.get(relPath) ?? 0) + 1);
             }
 
             const pastSessions = [...sessionMap.values()]
                 .sort((a, b) => b.appliedAt - a.appliedAt)
-                .slice(0, lastNSessions);
+                .slice(0, Math.max(0, lastNSessions));
 
-            // File modification frequency — "hot files"
-            const fileFreq = new Map<string, number>();
-            for (const row of rows) {
-                const rel = path.relative(this.rootDir, row.file_path).replace(/\\/g, '/');
-                fileFreq.set(rel, (fileFreq.get(rel) ?? 0) + 1);
-            }
             const hotFiles = [...fileFreq.entries()]
-                .sort((a, b) => b[1] - a[1])
+                .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
                 .slice(0, 8)
                 .map(([file, changeCount]) => ({ file, changeCount }));
 
-            // Recurring failures from failure_log
             let recurringFailureFiles: ProjectMemory['recurringFailureFiles'] = [];
             try {
                 const failures = this.db.prepare(`
-                    SELECT file_path, COUNT(*) as failureCount, MAX(message) as lastError
-                    FROM failure_log
-                    GROUP BY file_path
-                    HAVING failureCount >= 2
+                    SELECT
+                        fs.filePath AS file_path,
+                        SUM(COALESCE(fs.frequency, 1)) AS failureCount,
+                        (
+                            SELECT latest.message
+                            FROM failure_snapshots latest
+                            WHERE latest.filePath = fs.filePath
+                            ORDER BY latest.timestamp DESC
+                            LIMIT 1
+                        ) AS lastError
+                    FROM failure_snapshots fs
+                    GROUP BY fs.filePath
+                    HAVING SUM(COALESCE(fs.frequency, 1)) >= 2
                     ORDER BY failureCount DESC
                     LIMIT 6
                 `).all() as any[];
-                recurringFailureFiles = failures.map(f => ({
-                    file: path.relative(this.rootDir, f.file_path).replace(/\\/g, '/'),
-                    failureCount: f.failureCount,
-                    lastError: (f.lastError ?? '').toString().slice(0, 100),
+
+                recurringFailureFiles = failures.map(failure => ({
+                    file: path.relative(this.rootDir, failure.file_path).replace(/\\/g, '/'),
+                    failureCount: Number(failure.failureCount) || 0,
+                    lastError: String(failure.lastError ?? '').slice(0, 160),
                 }));
-            } catch { /* table may not exist */ }
+            } catch {
+                recurringFailureFiles = [];
+            }
 
             const memory: ProjectMemory = {
                 pastSessions,
@@ -113,47 +103,53 @@ export class SessionMemory {
             };
             memory.formatted = this.format(memory);
             return memory;
-
         } catch {
             return this.empty();
         }
     }
 
     private empty(): ProjectMemory {
-        return { pastSessions: [], totalChanges: 0, hotFiles: [], recurringFailureFiles: [], formatted: '' };
+        return {
+            pastSessions: [],
+            totalChanges: 0,
+            hotFiles: [],
+            recurringFailureFiles: [],
+            formatted: '',
+        };
     }
 
-    private format(m: ProjectMemory): string {
-        if (m.totalChanges === 0) return '';
+    private format(memory: ProjectMemory): string {
+        if (memory.totalChanges === 0 && memory.recurringFailureFiles.length === 0) return '';
 
         const lines: string[] = [
-            '=== PROJECT MEMORY (persistent across sessions) ===',
-            `Total changes recorded: ${m.totalChanges}`,
+            '=== PROJECT MEMORY (durable engineering evidence) ===',
+            `Recorded successful changes: ${memory.totalChanges}`,
             '',
         ];
 
-        if (m.pastSessions.length > 0) {
-            lines.push('Recent sessions (most recent first):');
-            for (const s of m.pastSessions) {
-                const date = new Date(s.appliedAt).toISOString().slice(0, 16).replace('T', ' ');
-                const fileList = s.filesModified.slice(0, 4).join(', ') + (s.filesModified.length > 4 ? ` +${s.filesModified.length - 4} more` : '');
-                lines.push(`  [${date}]  ${s.changeCount} changes  |  ${fileList}`);
+        if (memory.pastSessions.length > 0) {
+            lines.push('Recent recorded sessions:');
+            for (const session of memory.pastSessions) {
+                const date = new Date(session.appliedAt).toISOString().slice(0, 16).replace('T', ' ');
+                const fileList = session.filesModified.slice(0, 4).join(', ') +
+                    (session.filesModified.length > 4 ? ` +${session.filesModified.length - 4} more` : '');
+                lines.push(`  [${date}] ${session.changeCount} changes | ${fileList}`);
             }
             lines.push('');
         }
 
-        if (m.hotFiles.length > 0) {
-            lines.push('Hot files (modified most frequently — approach with care):');
-            for (const f of m.hotFiles.slice(0, 5)) {
-                lines.push(`  ${f.file}  (${f.changeCount}x)`);
+        if (memory.hotFiles.length > 0) {
+            lines.push('Frequently modified files:');
+            for (const file of memory.hotFiles.slice(0, 5)) {
+                lines.push(`  ${file.file} (${file.changeCount}x)`);
             }
             lines.push('');
         }
 
-        if (m.recurringFailureFiles.length > 0) {
-            lines.push('Recurring failure zones (do NOT repeat these mistakes):');
-            for (const f of m.recurringFailureFiles) {
-                lines.push(`  ${f.file}  (${f.failureCount} failures): ${f.lastError}`);
+        if (memory.recurringFailureFiles.length > 0) {
+            lines.push('Recurring failure zones:');
+            for (const failure of memory.recurringFailureFiles) {
+                lines.push(`  ${failure.file} (${failure.failureCount} failures): ${failure.lastError}`);
             }
             lines.push('');
         }
