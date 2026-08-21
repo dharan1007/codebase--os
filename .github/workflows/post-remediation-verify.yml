@@ -1,5 +1,6 @@
 name: Post-remediation verification
 
+# Rerun after the CLI compile fix.
 on:
   push:
     branches:
