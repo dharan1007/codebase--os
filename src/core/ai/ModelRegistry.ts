@@ -17,39 +17,36 @@ export type SemanticModelSlug =
     | 'embedding-small';
 
 /**
- * Provider model defaults are centralized and overridable. These are
- * compatibility defaults, not a claimed benchmark ranking.
+ * Current production defaults as of August 2026. They are semantic routing
+ * defaults, not benchmark claims, and every role remains environment-overridable.
  */
 const DEFAULTS: Record<SemanticModelSlug, Partial<Record<AIProviderKind, string>>> = {
     'reasoning-high': {
-        openai: 'gpt-5.6',
-        anthropic: 'claude-opus-4-1-20250805',
-        gemini: 'gemini-3.5-flash',
-        openrouter: 'openai/gpt-5.6',
+        openai: 'gpt-5.6-sol',
+        anthropic: 'claude-opus-5',
+        gemini: 'gemini-3.7-flash',
+        openrouter: 'openai/gpt-5.6-sol',
         ollama: 'qwen2.5-coder:latest',
     },
     'reasoning-fast': {
-        // OpenAI's public API quickstart documents the stable `gpt-5.6` ID.
-        // Use the same verified ID for fast/analysis roles unless an operator
-        // explicitly pins a different current model through environment config.
-        openai: 'gpt-5.6',
-        anthropic: 'claude-sonnet-4-20250514',
-        gemini: 'gemini-3.6-flash',
-        openrouter: 'google/gemini-3.6-flash',
+        openai: 'gpt-5.6-terra',
+        anthropic: 'claude-sonnet-5',
+        gemini: 'gemini-3.7-flash',
+        openrouter: 'anthropic/claude-sonnet-5',
         ollama: 'qwen2.5-coder:7b',
     },
     'analysis-fast': {
-        openai: 'gpt-5.6',
-        anthropic: 'claude-sonnet-4-20250514',
-        gemini: 'gemini-3.6-flash',
-        openrouter: 'google/gemini-3.6-flash',
+        openai: 'gpt-5.6-terra',
+        anthropic: 'claude-sonnet-5',
+        gemini: 'gemini-3.7-flash',
+        openrouter: 'google/gemini-3.7-flash',
         ollama: 'qwen2.5-coder:7b',
     },
     'design-premium': {
-        openai: 'gpt-5.6',
-        anthropic: 'claude-opus-4-1-20250805',
-        gemini: 'gemini-3.5-flash',
-        openrouter: 'openai/gpt-5.6',
+        openai: 'gpt-5.6-sol',
+        anthropic: 'claude-opus-5',
+        gemini: 'gemini-3.7-flash',
+        openrouter: 'openai/gpt-5.6-sol',
         ollama: 'qwen2.5-coder:latest',
     },
     'embedding-small': {
@@ -92,26 +89,35 @@ export const ModelRegistry = {
         }
 
         const model = mapping[provider];
-        if (!model) {
-            throw new Error(`No model mapping for semantic role "${slug}" on provider "${provider}".`);
-        }
+        if (!model) throw new Error(`No model mapping for semantic role "${slug}" on provider "${provider}".`);
         return model;
     },
 
     getCapabilities(modelId: string): ModelCapabilities {
-        // Conservative limits are safer than inventing a provider maximum. Each
-        // value can be overridden from environment when an account exposes a
-        // larger context window or different rate tier.
-        if (modelId.startsWith('gpt-5.6')) {
+        if (modelId === 'gpt-5.6' || modelId.startsWith('gpt-5.6-')) {
             return {
                 supportsSystemRole: true,
                 supportsJsonMode: true,
-                contextWindow: positiveInt(process.env['OPENAI_CONTEXT_WINDOW'], 128_000),
-                maxOutputTokens: positiveInt(process.env['OPENAI_MAX_OUTPUT_TOKENS'], 32_000),
-                tpmLimit: positiveInt(process.env['OPENAI_TPM'], 30_000),
+                contextWindow: positiveInt(process.env['OPENAI_CONTEXT_WINDOW'], 1_050_000),
+                maxOutputTokens: positiveInt(process.env['OPENAI_MAX_OUTPUT_TOKENS'], 128_000),
+                tpmLimit: positiveInt(process.env['OPENAI_TPM'], 500_000),
                 rpmLimit: positiveInt(process.env['OPENAI_RPM'], 50),
             };
         }
+
+        if (modelId.startsWith('claude-opus-5') || modelId.startsWith('claude-sonnet-5')) {
+            return {
+                supportsSystemRole: true,
+                supportsJsonMode: false,
+                contextWindow: positiveInt(process.env['ANTHROPIC_CONTEXT_WINDOW'], 1_000_000),
+                // Keep output conservative unless the operator/account publishes
+                // a larger supported limit. Context size is independently useful.
+                maxOutputTokens: positiveInt(process.env['ANTHROPIC_MAX_OUTPUT_TOKENS'], 8_192),
+                tpmLimit: positiveInt(process.env['ANTHROPIC_TPM'], 30_000),
+                rpmLimit: positiveInt(process.env['ANTHROPIC_RPM'], 40),
+            };
+        }
+
         if (modelId.startsWith('claude-opus-4') || modelId.startsWith('claude-sonnet-4')) {
             return {
                 supportsSystemRole: true,
@@ -122,12 +128,13 @@ export const ModelRegistry = {
                 rpmLimit: positiveInt(process.env['ANTHROPIC_RPM'], 40),
             };
         }
-        if (modelId.startsWith('gemini-3.')) {
+
+        if (modelId.startsWith('gemini-3.7-flash') || modelId.startsWith('gemini-3.6-flash')) {
             return {
                 supportsSystemRole: true,
                 supportsJsonMode: true,
-                contextWindow: positiveInt(process.env['GEMINI_CONTEXT_WINDOW'], 128_000),
-                maxOutputTokens: positiveInt(process.env['GEMINI_MAX_OUTPUT_TOKENS'], 8_192),
+                contextWindow: positiveInt(process.env['GEMINI_CONTEXT_WINDOW'], 1_048_576),
+                maxOutputTokens: positiveInt(process.env['GEMINI_MAX_OUTPUT_TOKENS'], 65_536),
                 tpmLimit: positiveInt(process.env['GEMINI_TPM'], 100_000),
                 rpmLimit: positiveInt(process.env['GEMINI_RPM'], 50),
             };
