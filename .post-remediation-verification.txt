@@ -1,0 +1,48 @@
+commit=455a6002fecd79d28bd2ef2be5b696bb5b7d3a71
+node=v20.20.2
+npm=10.8.2
+npm_ci_exit=0
+verify_exit=2
+audit_exit=0
+pack_exit=0
+--- npm ci tail ---
+npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+
+added 277 packages, and audited 278 packages in 9s
+
+42 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+--- verify tail ---
+
+> codebase-os@1.0.0 verify
+> npm run typecheck && npm run build && npm test
+
+
+> codebase-os@1.0.0 typecheck
+> tsc --project tsconfig.json --noEmit
+
+src/cli/commands/chat.ts(81,33): error TS2551: Property 'closed' does not exist on type 'Interface'. Did you mean 'close'?
+--- audit tail ---
+found 0 vulnerabilities
+--- pack tail ---
+npm notice
+npm notice 📦  codebase-os@1.0.0
+npm notice Tarball Contents
+npm notice 1.5kB LICENSE
+npm notice 12.8kB README.md
+npm notice 5.1kB SECURITY.md
+npm notice 2.4kB package.json
+npm notice Tarball Details
+npm notice name: codebase-os
+npm notice version: 1.0.0
+npm notice filename: codebase-os-1.0.0.tgz
+npm notice package size: 8.9 kB
+npm notice unpacked size: 21.9 kB
+npm notice shasum: d31f374d1363cb7b210daaa403b7c1641b4c0489
+npm notice integrity: sha512-K0jtNpykJgimj[...]ljQlv4EWRrEgg==
+npm notice total files: 4
+npm notice
+codebase-os-1.0.0.tgz
