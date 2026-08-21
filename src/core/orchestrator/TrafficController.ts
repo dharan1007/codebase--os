@@ -214,6 +214,11 @@ export class TrafficController extends EventEmitter {
             delay,
             error: req.lastError,
         });
+
+        // This timer is part of the externally awaited schedule() lifecycle.
+        // It must remain referenced: unref() lets Node terminate while the
+        // schedule promise is still pending, cancelling failover in CLI/test
+        // processes that have no unrelated event-loop handles.
         setTimeout(() => {
             if (Date.now() >= req.deadlineAt) {
                 req.reject(this.deadlineError(req));
@@ -221,7 +226,7 @@ export class TrafficController extends EventEmitter {
             }
             this.queue.unshift(req);
             void this.startProcessor();
-        }, Math.min(delay, Math.max(0, req.deadlineAt - Date.now()))).unref();
+        }, Math.min(delay, Math.max(0, req.deadlineAt - Date.now())));
     }
 
     private rejectExpired(): void {
