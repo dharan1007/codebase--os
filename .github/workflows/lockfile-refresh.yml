@@ -29,6 +29,9 @@ jobs:
       - name: Regenerate lockfile from patched dependency constraints
         run: npm install --package-lock-only --ignore-scripts
 
+      - name: Apply non-breaking advisory remediations to lockfile
+        run: npm audit fix --package-lock-only
+
       - name: Enforce production dependency security gate
         run: npm audit --omit=dev --audit-level=high
 
