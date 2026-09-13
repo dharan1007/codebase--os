@@ -1,19 +1,44 @@
-name: Legacy post-remediation verification (disabled)
+name: Generate patched dependency lockfile
 
-# Historical audit helper retained because the connected GitHub integration does not
-# permit destructive deletion. It is intentionally manual-only and read-only.
+# Temporary, read-only release-candidate helper. This workflow never pushes or mutates
+# repository state. It generates the npm manifest/lockfile pair for the patched js-yaml
+# release and uploads them for explicit review/application.
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - agent/production-hardening-final
+    paths:
+      - .github/workflows/post-remediation-verify.yml
 
 permissions:
   contents: read
 
 jobs:
-  explain:
+  generate-lockfile:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 10
     steps:
-      - name: Explain deprecation
-        run: |
-          echo "This legacy audit workflow is disabled for release use."
-          echo "Canonical release evidence is produced by CI and Security workflows."
+      - name: Checkout release candidate
+        uses: actions/checkout@v5
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Generate patched manifest and lockfile without lifecycle scripts
+        run: npm install js-yaml@4.3.2 --save-exact --package-lock-only --ignore-scripts
+
+      - name: Verify patched production dependency graph
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Upload reviewed lockfile inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-yaml-4.3.2-lockfile
+          path: |
+            package.json
+            package-lock.json
+          if-no-files-found: error
+          retention-days: 1
