@@ -4,10 +4,12 @@ Codebase OS v1 is a local, evidence-gated software-change runtime for AI-assiste
 
 ## Supported runtime
 
-- Node 20 and 22 are the supported Node.js release lines for v1.
+- Node 22 and 24 are the supported Node.js release lines for v1.
 - Git is required.
 - Docker is the primary isolation boundary for autonomous repository command execution.
 - Windows, macOS and Linux CLI/build compatibility are qualified in CI. Docker-based isolation is the authoritative autonomous execution model; platform compatibility does not imply identical host/container behavior on every operating system.
+
+Node 20 is outside the v1 support contract. The maintained native SQLite dependency used by Codebase OS is qualified against Node 22/24; v1 does not require Windows users to install a C++ compiler merely to install the CLI.
 
 ## Execution and isolation
 
@@ -60,4 +62,4 @@ Those capabilities may be evaluated or engineered in later enterprise-scale work
 
 ## Release evidence
 
-A release is eligible for production use within this stated scope only when the exact release/main commit passes the repository CI matrix, the production dependency security audit, package construction and packed-CLI installation smoke qualification. Public website/deployment copy must describe this scope and the proprietary/source-available licensing model accurately.
+A release is eligible for production use within this stated scope only when the exact release/main commit passes the Node 22/24 repository CI matrix across Ubuntu, Windows and macOS, the production dependency security audit, package construction and packed-CLI installation smoke qualification. Public website/deployment copy must describe this scope and the proprietary/source-available licensing model accurately.
