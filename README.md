@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/dharan1007/codebase--os/actions/workflows/ci.yml/badge.svg)](https://github.com/dharan1007/codebase--os/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Node](https://img.shields.io/badge/Node-20%2B-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/Node-20%20%7C%2022-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![License](https://img.shields.io/badge/License-Proprietary-6b7280?style=flat-square)](LICENSE)
 
 **Codebase OS is a local software-change runtime for AI-assisted engineering.** It combines repository scanning, a persistent typed relationship graph, dependency-first planning, transactional file mutation, durable engineering memory, isolated command execution, independent verification, and conflict-safe rollback.
@@ -20,6 +20,8 @@ Codebase OS intentionally distinguishes three states that AI tools often collaps
 3. **Verified** — independently discovered project gates passed after the latest mutation.
 
 `cos agent` and `cos chat` do not report verified completion after code changes unless the verification kernel succeeds. Reaching a step limit, a provider quota, a failed build/test, an unavailable sandbox, or an unknown verification strategy leaves the task incomplete instead of manufacturing success.
+
+The supported v1 operating envelope, verification semantics, scale constraints and explicit non-claims are defined in [docs/RELEASE_CONTRACT.md](docs/RELEASE_CONTRACT.md).
 
 ## Architecture
 
@@ -117,7 +119,7 @@ If code changed and no credible verification strategy can be discovered, complet
 
 Prerequisites:
 
-- Node.js 20 or newer
+- Node.js 20 or 22
 - Git
 - Docker for isolated autonomous command execution
 
@@ -214,14 +216,13 @@ The dashboard binds only to `127.0.0.1`, applies browser security headers, const
 
 ## CI and release gate
 
-The repository CI runs on Node 20 and requires:
+The repository CI qualifies Node 20 and Node 22 on Ubuntu, Windows and macOS. Every matrix cell runs a locked install plus typecheck, production build and tests. Canonical Ubuntu/Node 20 qualification also inspects the npm publish payload and installs the packed tarball into a clean temporary prefix before running the packaged `cos --help` entrypoint.
 
 ```text
 npm ci
-npm run typecheck
-npm run build
-npm test
-npm pack --dry-run
+npm run verify
+npm pack --dry-run        # canonical Ubuntu/Node 20
+npm run package:smoke     # canonical Ubuntu/Node 20
 ```
 
 `npm run verify` combines typecheck, build and tests, and `prepublishOnly` executes the same verification gate.
@@ -252,7 +253,7 @@ npm test
 npm run verify
 ```
 
-Tests currently include regression coverage for dependency-first planning and context-validated transactional patches. Production changes should add regression tests for every repaired failure mode rather than relying on prompt behavior.
+Tests include regression coverage for dependency-first planning, context-validated transactional patches, sandbox command rejection, Docker-unavailable fail-closed behavior, release copy and package/release contracts. Production changes should add regression tests for every repaired failure mode rather than relying on prompt behavior.
 
 ## License
 
