@@ -1,0 +1,48 @@
+name: One-time dependency remediation
+
+on:
+  push:
+    branches:
+      - agent/production-hardening-final
+    paths:
+      - .github/dependency-remediation-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  remediate:
+    if: github.actor == 'dharan1007'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/production-hardening-final
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Make test runner cross-platform
+        run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.scripts.test='node --test';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n')"
+      - name: Regenerate patched dependency lock
+        run: npm install better-sqlite3@12.11.1 js-yaml@4.3.2 --save-exact --package-lock-only --ignore-scripts
+      - name: Clean install generated lock
+        run: npm ci
+      - name: Verify source and regressions
+        run: npm run verify
+      - name: Verify production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+      - name: Verify packed artifact
+        run: npm run package:smoke
+      - name: Check patch hygiene
+        run: git diff --check
+      - name: Commit exact qualified dependency state
+        shell: bash
+        run: |
+          git config user.name "codebase-os-release-bot"
+          git config user.email "150376358+dharan1007@users.noreply.github.com"
+          git add package.json package-lock.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "fix: qualify Windows and patch release dependencies"
+          git push origin HEAD:agent/production-hardening-final
