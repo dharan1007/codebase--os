@@ -18,9 +18,14 @@ concurrency:
 
 jobs:
   verify:
-    name: Verify Node 20
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    name: Verify ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [20, 22]
 
     steps:
       - name: Checkout
@@ -29,7 +34,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
           cache: npm
 
       - name: Install locked dependencies
@@ -39,20 +44,9 @@ jobs:
         run: npm run verify
 
       - name: Verify publish payload
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 20
         run: npm pack --dry-run
 
-      - name: Generate patched js-yaml manifest and lockfile for review
-        run: npm install js-yaml@4.3.2 --save-exact --package-lock-only --ignore-scripts
-
-      - name: Verify patched production dependency graph
-        run: npm audit --omit=dev --audit-level=high
-
-      - name: Upload patched manifest and lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: js-yaml-4.3.2-lockfile
-          path: |
-            package.json
-            package-lock.json
-          if-no-files-found: error
-          retention-days: 1
+      - name: Install and smoke-test packed CLI
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 20
+        run: npm run package:smoke
