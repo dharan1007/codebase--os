@@ -40,3 +40,19 @@ jobs:
 
       - name: Verify publish payload
         run: npm pack --dry-run
+
+      - name: Generate patched js-yaml manifest and lockfile for review
+        run: npm install js-yaml@4.3.2 --save-exact --package-lock-only --ignore-scripts
+
+      - name: Verify patched production dependency graph
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Upload patched manifest and lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-yaml-4.3.2-lockfile
+          path: |
+            package.json
+            package-lock.json
+          if-no-files-found: error
+          retention-days: 1
