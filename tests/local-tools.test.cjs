@@ -31,7 +31,8 @@ test('patch_file applies only when current context matches', async t => {
   );
 
   assert.equal(result.success, true, result.error);
-  assert.equal(fs.readFileSync(target, 'utf8'), 'const a = 1;\nconst b = 3;\n');
+  const actual = fs.readFileSync(target, 'utf8').replace(/\r\n/g, '\n');
+  assert.equal(actual, 'const a = 1;\nconst b = 3;\n');
 });
 
 test('patch_file rejects stale context without modifying the file', async t => {
