@@ -3,213 +3,162 @@ import chalk from 'chalk';
 import inquirer from 'inquirer';
 import { loadContext } from '../context.js';
 import { AgentLoop } from '../../core/ai/AgentLoop.js';
-import { computeDiff } from '../../utils/diff.js';
 import path from 'path';
-import fs from 'fs';
 
-const TOOL_COLOR: Record<string, (s: string) => string> = {
-    write_file:      chalk.green,
-    patch_file:      chalk.cyan,
-    read_file:       chalk.gray,
-    list_files:      chalk.gray,
-    search_code:     chalk.blue,
+const TOOL_COLOR: Record<string, (value: string) => string> = {
+    write_file: chalk.green,
+    patch_file: chalk.cyan,
+    read_file: chalk.gray,
+    list_files: chalk.gray,
+    search_code: chalk.blue,
     find_references: chalk.blue,
-    run_shell:       chalk.yellow,
-    delete_file:     chalk.red,
-    move_file:       chalk.magenta,
-    finish:          chalk.green,
+    run_shell: chalk.yellow,
+    delete_file: chalk.red,
+    move_file: chalk.magenta,
+    finish: chalk.green,
 };
 
 function formatTool(tool: string): string {
-    const fn = TOOL_COLOR[tool] ?? chalk.white;
-    return fn(tool.toUpperCase().replace(/_/g, '_'));
+    return (TOOL_COLOR[tool] ?? chalk.white)(tool.toUpperCase());
 }
 
-function renderInlineDiff(filePath: string, rootDir: string, newContent?: string, unifiedDiff?: string): void {
-    try {
-        const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(rootDir, filePath);
-
-        let diffText: string;
-        if (unifiedDiff) {
-            diffText = unifiedDiff;
-        } else if (newContent) {
-            let original = '';
-            try { original = fs.readFileSync(absPath, 'utf8'); } catch { /* new file */ }
-            diffText = computeDiff(original, newContent, filePath).raw;
-        } else {
-            return;
-        }
-
-        const lines = diffText.split('\n');
-        let shown = 0;
-        const MAX_LINES = 30;
-
-        for (const line of lines) {
-            if (shown >= MAX_LINES) {
-                console.log(chalk.gray(`  ... (${lines.length - shown} more diff lines)`));
-                break;
-            }
-            if (line.startsWith('+++') || line.startsWith('---')) continue;
-            if (line.startsWith('@@')) {
-                console.log(chalk.cyan(`  ${line}`));
-            } else if (line.startsWith('+')) {
-                console.log(chalk.green(`  ${line}`));
-            } else if (line.startsWith('-')) {
-                console.log(chalk.red(`  ${line}`));
-            } else {
-                console.log(chalk.gray(`  ${line}`));
-            }
-            shown++;
-        }
-    } catch {
-        // diff rendering is best-effort
+function renderDiff(diffText: string): void {
+    const lines = diffText.split('\n');
+    const limit = 30;
+    for (const line of lines.slice(0, limit)) {
+        if (line.startsWith('+++') || line.startsWith('---')) continue;
+        if (line.startsWith('@@')) console.log(chalk.cyan(`  ${line}`));
+        else if (line.startsWith('+')) console.log(chalk.green(`  ${line}`));
+        else if (line.startsWith('-')) console.log(chalk.red(`  ${line}`));
+        else console.log(chalk.gray(`  ${line}`));
     }
+    if (lines.length > limit) console.log(chalk.gray(`  ... (${lines.length - limit} more diff lines)`));
 }
 
 function renderTasklist(tasklist: string[]): void {
-    if (!tasklist || tasklist.length === 0) return;
-    const done = tasklist.filter(t => t.includes('(done)')).length;
-    const total = tasklist.length;
-    const active = tasklist.find(t => t.includes('(in progress)'));
+    if (!tasklist?.length) return;
+    const done = tasklist.filter(item => item.includes('(done)')).length;
+    const active = tasklist.find(item => item.includes('(in progress)'));
     console.log(
-        chalk.gray(`  Tasks: [${done}/${total}]`) +
-        (active ? chalk.white(` — ${active.replace('(in progress)', '').trim()}`) : '')
+        chalk.gray(`  Tasks: [${done}/${tasklist.length}]`) +
+        (active ? chalk.white(` — ${active.replace('(in progress)', '').trim()}`) : ''),
     );
 }
 
 export function agentCommand(): Command {
     return new Command('agent')
-        .description('Autonomous AI agent — reads, plans, writes, and verifies code autonomously')
-        .argument('[task]', 'The coding task to accomplish')
+        .description('Transactional autonomous coding agent with independent completion verification')
+        .argument('[task]', 'Engineering task to accomplish')
         .option('--max-steps <n>', 'Maximum agent loop iterations', '40')
-        .option('--show-diff', 'Show inline colored diffs on every file write (default: on)', true)
+        .option('--show-diff', 'Show inline diffs for patch operations', true)
         .action(async (task: string | undefined, opts: any) => {
-            let actualTask: string;
-            if (!task) {
+            let actualTask = task?.trim() ?? '';
+            if (!actualTask) {
                 const { input } = await inquirer.prompt([{
                     type: 'input',
                     name: 'input',
                     message: 'What should the agent build or fix?',
-                    validate: (v) => v.trim().length > 0 || 'Please describe the task.',
+                    validate: (value: string) => value.trim().length > 0 || 'Please describe the task.',
                 }]);
-                actualTask = input;
-            } else {
-                actualTask = task;
+                actualTask = String(input).trim();
             }
 
             const ctx = await loadContext();
             if (!ctx) return;
-
             const { config, db, sessionId, aiProvider, graph, store } = ctx;
+            const maxSteps = Math.min(120, Math.max(1, Number.parseInt(String(opts.maxSteps), 10) || 40));
 
             console.log('');
-            console.log(chalk.bold('Codebase OS — Autonomous Agent'));
-            console.log(chalk.gray('─'.repeat(50)));
-            console.log(`  Task:    ${chalk.cyan(actualTask)}`);
-            console.log(`  Root:    ${chalk.gray(config.rootDir)}`);
-            console.log(`  Max:     ${chalk.gray(opts.maxSteps + ' steps')}`);
-            console.log(chalk.gray('─'.repeat(50)));
+            console.log(chalk.bold('Codebase OS — Verified Autonomous Agent'));
+            console.log(chalk.gray('─'.repeat(56)));
+            console.log(`  Task:     ${chalk.cyan(actualTask)}`);
+            console.log(`  Root:     ${chalk.gray(config.rootDir)}`);
+            console.log(`  Max:      ${chalk.gray(`${maxSteps} steps`)}`);
+            console.log(`  Complete: ${chalk.gray('only after independent post-mutation verification')}`);
+            console.log(chalk.gray('─'.repeat(56)));
             console.log('');
 
             const agent = new AgentLoop(aiProvider, config.rootDir, db, sessionId, graph, store);
-
             const result = await agent.run(actualTask, {
-                maxSteps: parseInt(opts.maxSteps, 10) || 40,
-
+                maxSteps,
                 onStep: async (step: number, action: any, toolResult: any, tasklist: string[], diff?: string) => {
-                    // Never clear the terminal — always append
-
-                    if ((action as any).tool === 'thinking') {
-                        process.stdout.write(chalk.gray(action.args?.token ?? ''));
+                    if (toolResult.isStreaming) {
+                        process.stdout.write(chalk.gray(String(toolResult.output || '')));
                         return;
                     }
 
                     const status = toolResult.success ? chalk.green('OK') : chalk.red('FAIL');
-                    const toolStr = formatTool(action.tool);
-                    const target = action.args?.path || action.args?.command || action.args?.dir || '';
-                    const targetStr = target ? chalk.gray(` ${target}`) : '';
+                    const target = action.args?.path || action.args?.oldPath || action.args?.command || action.args?.dir || '';
+                    console.log(`${chalk.gray(`[${step}]`)} ${formatTool(action.tool)}${target ? chalk.gray(` ${target}`) : ''} ${status}`);
 
-                    console.log(`${chalk.gray(`[${step}]`)} ${toolStr}${targetStr} ${status}`);
-
-                    // Show reasoning on a single line
                     if (action.reasoning) {
-                        const short = action.reasoning.substring(0, 100) + (action.reasoning.length > 100 ? '...' : '');
-                        console.log(chalk.gray(`     ${short}`));
+                        const reasoning = String(action.reasoning);
+                        console.log(chalk.gray(`     ${reasoning.length > 120 ? `${reasoning.slice(0, 120)}...` : reasoning}`));
                     }
-
-                    // Handle interactive pause_and_ask
-                    if (action.tool === 'pause_and_ask') {
-                        console.log(chalk.yellow('\n  INTERVENTION REQUIRED'));
-                        const { feedback } = await inquirer.prompt([{
-                            type: 'input',
-                            name: 'feedback',
-                            message: `  ${action.args?.['feedback'] ?? 'Agent needs input:'}`,
-                        }]);
-                        toolResult.output = feedback;
-                    }
-
-                    // Show streaming shell output
-                    if (toolResult.isStreaming) {
-                        process.stdout.write(chalk.gray(toolResult.output));
-                        return;
-                    }
-
-                    // Show error detail
                     if (!toolResult.success && toolResult.error) {
-                        console.log(chalk.red(`     Error: ${toolResult.error.substring(0, 120)}`));
+                        console.log(chalk.red(`     Error: ${String(toolResult.error).slice(0, 220)}`));
                     }
-
-                    // Show inline diff for write and patch operations
-                    if (toolResult.success && opts.showDiff !== false) {
-                        if (action.tool === 'patch_file' && diff) {
-                            renderInlineDiff(action.args?.path ?? '', config.rootDir, undefined, diff);
-                        } else if (action.tool === 'write_file' && action.args?.content) {
-                            renderInlineDiff(action.args?.path ?? '', config.rootDir, action.args.content);
-                        }
+                    if (toolResult.success && opts.showDiff !== false && action.tool === 'patch_file' && diff) {
+                        renderDiff(diff);
                     }
-
-                    // Compact tasklist indicator (no screen clearing)
                     renderTasklist(tasklist);
                     console.log('');
                 },
             });
 
-            // Final summary
             console.log('');
-            console.log(chalk.bold('─'.repeat(50)));
-            console.log(chalk.bold('Agent Complete'));
-            console.log(chalk.gray('─'.repeat(50)));
-            console.log(`  Status:  ${result.success ? chalk.green('Completed') : chalk.yellow('Paused')}`);
-            console.log(`  Steps:   ${chalk.white(String(result.totalSteps))}`);
-            console.log(`  Summary: ${chalk.white(result.summary)}`);
+            console.log(chalk.bold('─'.repeat(56)));
+            const outcome = result.success
+                ? chalk.green.bold('VERIFIED COMPLETION')
+                : result.verified
+                    ? chalk.yellow.bold('VERIFIED STATE, TASK INCOMPLETE')
+                    : chalk.yellow.bold('INCOMPLETE / NOT VERIFIED');
+            console.log(outcome);
+            console.log(chalk.gray('─'.repeat(56)));
+            console.log(`  Steps:    ${result.totalSteps}`);
+            console.log(`  Summary:  ${result.summary}`);
+            console.log(`  Verified: ${result.verified ? chalk.green('yes') : chalk.yellow('no')}`);
 
             if (result.filesWritten.length > 0) {
                 console.log('');
-                console.log(chalk.bold('  Files Modified:'));
-                for (const f of [...new Set(result.filesWritten)]) {
-                    console.log(`    ${chalk.green('+')} ${f}`);
+                console.log(chalk.bold('  Affected paths:'));
+                for (const file of [...new Set(result.filesWritten)]) {
+                    const display = path.isAbsolute(file)
+                        ? path.relative(config.rootDir, file)
+                        : file;
+                    console.log(`    ${chalk.gray('-')} ${display}`);
+                }
+            }
+
+            if (result.verificationCommands.length > 0) {
+                console.log('');
+                console.log(chalk.bold('  Verification evidence:'));
+                for (const command of result.verificationCommands) {
+                    console.log(`    ${chalk.gray('-')} ${command}`);
                 }
             }
 
             if (result.tasklist.length > 0) {
                 console.log('');
-                console.log(chalk.bold('  Final Task Plan:'));
-                for (const t of result.tasklist) {
-                    const isDone = t.includes('(done)');
-                    const isActive = t.includes('(in progress)');
-                    const prefix = isDone ? chalk.green('[x]') : isActive ? chalk.yellow('[>]') : chalk.gray('[ ]');
-                    const text = isDone ? chalk.gray(t) : isActive ? chalk.white(t) : chalk.gray(t);
-                    console.log(`    ${prefix} ${text}`);
+                console.log(chalk.bold('  Final task plan:'));
+                for (const item of result.tasklist) {
+                    const done = item.includes('(done)');
+                    const active = item.includes('(in progress)');
+                    const marker = done ? '[x]' : active ? '[>]' : '[ ]';
+                    console.log(`    ${done ? chalk.green(marker) : active ? chalk.yellow(marker) : chalk.gray(marker)} ${item}`);
                 }
             }
 
-            if (result.outageDetected || result.quotaReached) {
+            if (result.quotaReached || result.outageDetected) {
                 console.log('');
-                const title = result.quotaReached ? 'QUOTA REACHED' : 'PROVIDER OUTAGE';
-                console.log(chalk.bold.bgYellow.black(` ${title} `));
-                console.log(chalk.yellow('  Progress saved. Run cos continue to resume.'));
+                console.log(chalk.yellow(
+                    result.quotaReached
+                        ? 'Provider quota/rate limit interrupted execution. The checkpoint remains resumable with `cos continue`.'
+                        : 'Provider execution failed. The checkpoint remains resumable with `cos continue`.',
+                ));
             }
 
+            if (!result.success) process.exitCode = 1;
             console.log('');
         });
 }

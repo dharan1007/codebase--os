@@ -5,123 +5,148 @@ export interface ModelCapabilities {
     supportsJsonMode: boolean;
     contextWindow: number;
     maxOutputTokens: number;
-    tpmLimit: number; // Tokens Per Minute
-    rpmLimit: number; // Requests Per Minute
+    tpmLimit: number;
+    rpmLimit: number;
 }
 
-export type SemanticModelSlug = 
-    | 'reasoning-high' 
-    | 'reasoning-fast' 
-    | 'analysis-fast' 
+export type SemanticModelSlug =
+    | 'reasoning-high'
+    | 'reasoning-fast'
+    | 'analysis-fast'
     | 'design-premium'
     | 'embedding-small';
 
+/**
+ * Current production defaults as of August 2026. They are semantic routing
+ * defaults, not benchmark claims, and every role remains environment-overridable.
+ */
+const DEFAULTS: Record<SemanticModelSlug, Partial<Record<AIProviderKind, string>>> = {
+    'reasoning-high': {
+        openai: 'gpt-5.6-sol',
+        anthropic: 'claude-opus-5',
+        gemini: 'gemini-3.7-flash',
+        openrouter: 'openai/gpt-5.6-sol',
+        ollama: 'qwen2.5-coder:latest',
+    },
+    'reasoning-fast': {
+        openai: 'gpt-5.6-terra',
+        anthropic: 'claude-sonnet-5',
+        gemini: 'gemini-3.7-flash',
+        openrouter: 'anthropic/claude-sonnet-5',
+        ollama: 'qwen2.5-coder:7b',
+    },
+    'analysis-fast': {
+        openai: 'gpt-5.6-terra',
+        anthropic: 'claude-sonnet-5',
+        gemini: 'gemini-3.7-flash',
+        openrouter: 'google/gemini-3.7-flash',
+        ollama: 'qwen2.5-coder:7b',
+    },
+    'design-premium': {
+        openai: 'gpt-5.6-sol',
+        anthropic: 'claude-opus-5',
+        gemini: 'gemini-3.7-flash',
+        openrouter: 'openai/gpt-5.6-sol',
+        ollama: 'qwen2.5-coder:latest',
+    },
+    'embedding-small': {
+        openai: 'text-embedding-3-small',
+        gemini: 'gemini-embedding-2',
+        openrouter: 'openai/text-embedding-3-small',
+    },
+};
+
+const ENV_PREFIX: Partial<Record<AIProviderKind, string>> = {
+    openai: 'OPENAI',
+    anthropic: 'ANTHROPIC',
+    gemini: 'GEMINI',
+    openrouter: 'OPENROUTER',
+    ollama: 'OLLAMA',
+};
+
+function slugEnvSuffix(slug: SemanticModelSlug): string {
+    return slug.toUpperCase().replace(/-/g, '_');
+}
+
+function positiveInt(value: string | undefined, fallback: number): number {
+    if (!value) return fallback;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export const ModelRegistry = {
-    // Semantic Slug mapping to Provider-specific IDs
-    mappings: {
-        'reasoning-high': {
-            openrouter: 'anthropic/claude-3.5-sonnet',
-            anthropic: 'claude-3-5-sonnet-latest',
-            openai: 'gpt-4o',
-            gemini: 'gemini-1.5-pro',
-        },
-        'reasoning-fast': {
-            openrouter: 'openai/gpt-4o-mini',
-            openai: 'gpt-4o-mini',
-            anthropic: 'claude-3-haiku-20240307',
-            gemini: 'gemini-1.5-flash',
-        },
-        'analysis-fast': {
-            openrouter: 'google/gemini-flash-1.5',
-            gemini: 'gemini-1.5-flash',
-            openai: 'gpt-4o-mini',
-        },
-        'design-premium': {
-            openrouter: 'anthropic/claude-3.5-sonnet',
-            anthropic: 'claude-3-5-sonnet-latest',
-            openai: 'gpt-4o',
-        },
-        'embedding-small': {
-            openai: 'text-embedding-3-small',
-            gemini: 'text-embedding-004',
-            openrouter: 'openai/text-embedding-3-small',
-        }
-    } as Record<SemanticModelSlug, Partial<Record<AIProviderKind, string>>>,
-
-    // Full Capability Registry
-    capabilities: {
-        'anthropic/claude-3.5-sonnet': {
-            supportsSystemRole: true,
-            supportsJsonMode: true,
-            contextWindow: 200000,
-            maxOutputTokens: 8192,
-            tpmLimit: 80000,
-            rpmLimit: 50,
-        },
-        'claude-3-5-sonnet-latest': {
-            supportsSystemRole: true,
-            supportsJsonMode: true,
-            contextWindow: 200000,
-            maxOutputTokens: 8192,
-            tpmLimit: 80000,
-            rpmLimit: 50,
-        },
-        'gpt-4o': {
-            supportsSystemRole: true,
-            supportsJsonMode: true,
-            contextWindow: 128000,
-            maxOutputTokens: 4096,
-            tpmLimit: 30000,
-            rpmLimit: 3500, // OpenAI has high RPM
-        },
-        'google/gemini-flash-1.5': {
-            supportsSystemRole: true,
-            supportsJsonMode: true,
-            contextWindow: 1000000,
-            maxOutputTokens: 8192,
-            tpmLimit: 1000000,
-            rpmLimit: 2000,
-        },
-        'gemini-1.5-flash': {
-            supportsSystemRole: true,
-            supportsJsonMode: true,
-            contextWindow: 1000000,
-            maxOutputTokens: 8192,
-            tpmLimit: 1000000,
-            rpmLimit: 2000,
-        }
-    } as Record<string, ModelCapabilities>,
-
-    /**
-     * Resolves a semantic slug to a provider-specific model ID.
-     */
     resolve(slug: SemanticModelSlug | string, provider: AIProviderKind): string {
-        const mapping = this.mappings[slug as SemanticModelSlug];
-        if (!mapping) return slug; // Already a raw ID
+        const mapping = DEFAULTS[slug as SemanticModelSlug];
+        if (!mapping) return slug;
 
-        const providerId = mapping[provider];
-        if (providerId) return providerId;
+        const prefix = ENV_PREFIX[provider];
+        if (prefix) {
+            const exact = process.env[`COS_${prefix}_${slugEnvSuffix(slug as SemanticModelSlug)}_MODEL`];
+            if (exact?.trim()) return exact.trim();
 
-        // Intelligent fallback
-        if (provider === 'openrouter') return 'anthropic/claude-3.5-sonnet';
-        if (provider === 'openai') return 'gpt-4o';
-        if (provider === 'anthropic') return 'claude-3-5-sonnet-latest';
-        
-        return slug;
+            const providerDefault = process.env[`${prefix}_MODEL`];
+            if (providerDefault?.trim() && slug !== 'embedding-small') return providerDefault.trim();
+        }
+
+        const model = mapping[provider];
+        if (!model) throw new Error(`No model mapping for semantic role "${slug}" on provider "${provider}".`);
+        return model;
     },
 
-    /**
-     * Get capabilities for a specific model ID.
-     */
     getCapabilities(modelId: string): ModelCapabilities {
-        // Default to safe values if unknown
-        return this.capabilities[modelId] || {
-            supportsSystemRole: false, // Safer default
+        if (modelId === 'gpt-5.6' || modelId.startsWith('gpt-5.6-')) {
+            return {
+                supportsSystemRole: true,
+                supportsJsonMode: true,
+                contextWindow: positiveInt(process.env['OPENAI_CONTEXT_WINDOW'], 1_050_000),
+                maxOutputTokens: positiveInt(process.env['OPENAI_MAX_OUTPUT_TOKENS'], 128_000),
+                tpmLimit: positiveInt(process.env['OPENAI_TPM'], 500_000),
+                rpmLimit: positiveInt(process.env['OPENAI_RPM'], 50),
+            };
+        }
+
+        if (modelId.startsWith('claude-opus-5') || modelId.startsWith('claude-sonnet-5')) {
+            return {
+                supportsSystemRole: true,
+                supportsJsonMode: false,
+                contextWindow: positiveInt(process.env['ANTHROPIC_CONTEXT_WINDOW'], 1_000_000),
+                // Keep output conservative unless the operator/account publishes
+                // a larger supported limit. Context size is independently useful.
+                maxOutputTokens: positiveInt(process.env['ANTHROPIC_MAX_OUTPUT_TOKENS'], 8_192),
+                tpmLimit: positiveInt(process.env['ANTHROPIC_TPM'], 30_000),
+                rpmLimit: positiveInt(process.env['ANTHROPIC_RPM'], 40),
+            };
+        }
+
+        if (modelId.startsWith('claude-opus-4') || modelId.startsWith('claude-sonnet-4')) {
+            return {
+                supportsSystemRole: true,
+                supportsJsonMode: false,
+                contextWindow: positiveInt(process.env['ANTHROPIC_CONTEXT_WINDOW'], 200_000),
+                maxOutputTokens: positiveInt(process.env['ANTHROPIC_MAX_OUTPUT_TOKENS'], 8_192),
+                tpmLimit: positiveInt(process.env['ANTHROPIC_TPM'], 30_000),
+                rpmLimit: positiveInt(process.env['ANTHROPIC_RPM'], 40),
+            };
+        }
+
+        if (modelId.startsWith('gemini-3.7-flash') || modelId.startsWith('gemini-3.6-flash')) {
+            return {
+                supportsSystemRole: true,
+                supportsJsonMode: true,
+                contextWindow: positiveInt(process.env['GEMINI_CONTEXT_WINDOW'], 1_048_576),
+                maxOutputTokens: positiveInt(process.env['GEMINI_MAX_OUTPUT_TOKENS'], 65_536),
+                tpmLimit: positiveInt(process.env['GEMINI_TPM'], 100_000),
+                rpmLimit: positiveInt(process.env['GEMINI_RPM'], 50),
+            };
+        }
+
+        return {
+            supportsSystemRole: true,
             supportsJsonMode: false,
-            contextWindow: 8192,
-            maxOutputTokens: 2048,
-            tpmLimit: 20000,
-            rpmLimit: 10,
+            contextWindow: positiveInt(process.env['COS_DEFAULT_CONTEXT_WINDOW'], 32_000),
+            maxOutputTokens: positiveInt(process.env['COS_DEFAULT_MAX_OUTPUT_TOKENS'], 4_096),
+            tpmLimit: positiveInt(process.env['COS_DEFAULT_TPM'], 20_000),
+            rpmLimit: positiveInt(process.env['COS_DEFAULT_RPM'], 10),
         };
-    }
+    },
 };

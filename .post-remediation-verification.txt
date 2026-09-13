@@ -1,0 +1,6 @@
+LEGACY AUDIT ARTIFACT — NOT RELEASE EVIDENCE
+
+This file is retained only because the connected GitHub integration does not permit destructive deletion.
+Do not use it to determine release status.
+
+Canonical release evidence is the GitHub Actions CI and Security result for the exact candidate or main commit SHA.

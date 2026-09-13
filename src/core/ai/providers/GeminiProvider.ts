@@ -6,6 +6,7 @@ import { classifyProviderError } from './ProviderError.js';
 
 const MAX_RETRIES = 4;
 const BASE_DELAY_MS = 1500;
+const HEALTH_TIMEOUT_MS = 10_000;
 
 export class GeminiProvider implements AIProvider {
     readonly kind: AIProviderKind = 'gemini';
@@ -13,15 +14,12 @@ export class GeminiProvider implements AIProvider {
     private modelName: string;
     private limiter: RateLimiter;
 
-    constructor(apiKey: string, model = 'gemini-1.5-pro') {
+    constructor(private apiKey: string, model = 'gemini-3.7-flash') {
         this.genAI = new GoogleGenerativeAI(apiKey);
         this.modelName = model;
-
-        // RPM is configurable. Free tier = 15 RPM. Paid tier can be 1000+.
-        // Default to 50 (Gemini API standard tier). Override via GEMINI_RPM env.
-        const rpm = parseInt(process.env['GEMINI_RPM'] ?? '50', 10);
+        const rpm = this.positiveInt(process.env['GEMINI_RPM'], 50);
         this.limiter = new RateLimiter({
-            maxConcurrency: 3,
+            maxConcurrency: Math.min(3, this.positiveInt(process.env['GEMINI_MAX_CONCURRENCY'], 3)),
             requestsPerMinute: rpm,
             delayBetweenRequestsMs: Math.ceil(60_000 / rpm),
             circuitBreakerThreshold: 5,
@@ -32,37 +30,26 @@ export class GeminiProvider implements AIProvider {
     }
 
     async execute(request: ModelRequest): Promise<ModelResponse> {
-        return this.limiter.execute(async () => {
-            return RateLimiter.withRetry(
-                () => this.callAPI(request),
-                MAX_RETRIES,
-                BASE_DELAY_MS,
-                'gemini.execute'
-            );
-        });
+        return this.limiter.execute(() =>
+            RateLimiter.withRetry(() => this.callAPI(request), MAX_RETRIES, BASE_DELAY_MS, 'gemini.execute'),
+        );
     }
 
     private async callAPI(request: ModelRequest): Promise<ModelResponse> {
         const modelName = request.modelOverride ?? this.modelName;
         const currentModel = this.genAI.getGenerativeModel({ model: modelName });
-
         try {
             const promptParts: Array<{ text: string }> = [];
-            if (request.systemPrompt) {
-                promptParts.push({ text: `System: ${request.systemPrompt}\n\n` });
-            }
-            promptParts.push({ text: request.context });
+            if (request.systemPrompt) promptParts.push({ text: `SYSTEM INSTRUCTIONS:\n${request.systemPrompt}\n\n` });
+            promptParts.push({ text: String(request.context) });
 
             const result = await currentModel.generateContent({
                 contents: [{ role: 'user', parts: promptParts }],
-                generationConfig: {
-                    temperature: request.temperature ?? 0.2,
-                    maxOutputTokens: request.maxTokens ?? 4096,
-                },
+                generationConfig: { maxOutputTokens: request.maxTokens ?? 4096 },
             });
-
             const response = await result.response;
             const content = response.text();
+            if (!content.trim()) throw new Error('Gemini returned an empty text response.');
 
             return {
                 content,
@@ -76,12 +63,7 @@ export class GeminiProvider implements AIProvider {
             };
         } catch (err) {
             const classified = classifyProviderError(err, 'gemini');
-            logger.error('Gemini call failed', {
-                code: classified.code,
-                model: modelName,
-                retryable: classified.isRetryable,
-                error: classified.message,
-            });
+            logger.error('Gemini call failed', { code: classified.code, model: modelName, retryable: classified.isRetryable, error: classified.message });
             throw classified;
         }
     }
@@ -89,80 +71,81 @@ export class GeminiProvider implements AIProvider {
     async embed(text: string): Promise<number[]> {
         return this.limiter.execute(async () => {
             try {
-                const embedModel = this.genAI.getGenerativeModel({ model: 'text-embedding-004' });
+                const embedModel = this.genAI.getGenerativeModel({ model: process.env['GEMINI_EMBEDDING_MODEL'] || 'gemini-embedding-2' });
                 const result = await embedModel.embedContent(text);
                 return result.embedding.values;
             } catch (err) {
-                const classified = classifyProviderError(err, 'gemini-embed');
-                logger.error('Gemini embedding failed', { error: classified.message });
-                throw classified;
+                throw classifyProviderError(err, 'gemini-embed');
             }
         });
     }
 
     async batchEmbed(texts: string[]): Promise<number[][]> {
         if (texts.length === 0) return [];
-
-        const embedModel = this.genAI.getGenerativeModel({ model: 'text-embedding-004' });
+        const embeddingModel = process.env['GEMINI_EMBEDDING_MODEL'] || 'gemini-embedding-2';
+        const embedModel = this.genAI.getGenerativeModel({ model: embeddingModel });
         const results: number[][] = [];
         const chunkSize = 100;
 
-        for (let i = 0; i < texts.length; i += chunkSize) {
-            const chunk = texts.slice(i, i + chunkSize);
+        for (let offset = 0; offset < texts.length; offset += chunkSize) {
+            const chunk = texts.slice(offset, offset + chunkSize);
             try {
-                const batchResult = await this.limiter.execute(() =>
-                    embedModel.batchEmbedContents({
-                        requests: chunk.map(text => ({
-                            content: { role: 'user', parts: [{ text }] },
-                            taskType: 'RETRIEVAL_DOCUMENT' as any,
-                        })),
-                    })
-                );
-                results.push(...batchResult.embeddings.map(e => e.values));
+                const batchResult = await this.limiter.execute(() => embedModel.batchEmbedContents({
+                    requests: chunk.map(text => ({
+                        content: { role: 'user', parts: [{ text }] },
+                        taskType: 'RETRIEVAL_DOCUMENT' as any,
+                    })),
+                }));
+                results.push(...batchResult.embeddings.map(embedding => embedding.values));
             } catch (err) {
                 const classified = classifyProviderError(err, 'gemini-batch-embed');
-                logger.warn(`Gemini batch embed failed for chunk starting at ${i}`, {
-                    code: classified.code,
-                    error: classified.message,
-                });
-                // Fill missing embeddings with empty arrays to preserve index alignment
-                for (let j = 0; j < chunk.length; j++) results.push([]);
-            }
-
-            // Steady drip between chunks to respect rate limits
-            if (i + chunkSize < texts.length) {
-                await new Promise(r => setTimeout(r, Math.ceil(60_000 / (parseInt(process.env['GEMINI_RPM'] ?? '50', 10)))));
+                logger.warn('Gemini batch embed failed; returning empty aligned vectors', { offset, code: classified.code, error: classified.message });
+                for (let index = 0; index < chunk.length; index++) results.push([]);
             }
         }
-
         return results;
     }
 
     async isAvailable(): Promise<boolean> {
+        if (!this.apiKey.trim()) return false;
         try {
-            const model = this.genAI.getGenerativeModel({ model: this.modelName });
-            const result = await model.generateContent({
-                contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
-                generationConfig: { maxOutputTokens: 5 },
-            });
-            const response = await result.response;
-            return !!response.text();
+            const models = await this.fetchModels();
+            return models.some(model => model === this.modelName || model.endsWith(`/${this.modelName}`));
         } catch (err) {
-            const classified = classifyProviderError(err, 'gemini');
-            if (classified.code === 'AUTH_ERROR') {
-                logger.warn('Gemini: Invalid API key');
-            }
+            const classified = classifyProviderError(err, 'gemini-health');
+            if (classified.code === 'AUTH_ERROR') logger.warn('Gemini: invalid API key');
             return false;
         }
     }
 
     async listModels(): Promise<string[]> {
-        return [
-            'gemini-1.5-pro',
-            'gemini-1.5-flash',
-            'gemini-2.0-flash',
-            'gemini-2.5-pro',
-            'gemini-1.0-pro',
-        ];
+        if (!this.apiKey.trim()) return [];
+        return this.fetchModels();
+    }
+
+    private async fetchModels(): Promise<string[]> {
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(this.apiKey)}`,
+            { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) },
+        );
+        const payload = await response.json() as {
+            models?: Array<{ name?: string; baseModelId?: string; supportedGenerationMethods?: string[] }>;
+            error?: { message?: string };
+        };
+        if (!response.ok) {
+            const error = new Error(payload.error?.message || `Gemini model list returned HTTP ${response.status}`) as Error & { status?: number };
+            error.status = response.status;
+            throw error;
+        }
+        return (payload.models ?? [])
+            .filter(model => model.supportedGenerationMethods?.includes('generateContent'))
+            .map(model => model.baseModelId || model.name?.replace(/^models\//, '') || '')
+            .filter(Boolean)
+            .sort();
+    }
+
+    private positiveInt(value: string | undefined, fallback: number): number {
+        const parsed = Number.parseInt(value ?? '', 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
     }
 }

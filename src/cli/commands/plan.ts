@@ -4,34 +4,32 @@ import ora from 'ora';
 import path from 'path';
 import { loadContext } from '../context.js';
 import { TopologicalPlanner } from '../../core/ai/TopologicalPlanner.js';
-import type { BlastRadiusReport, PlannedFile } from '../../core/ai/TopologicalPlanner.js';
+import type { BlastRadiusReport } from '../../core/ai/TopologicalPlanner.js';
 
-const LAYER_COLOR: Record<string, (s: string) => string> = {
-    database:       chalk.yellow,
-    backend:        chalk.cyan,
-    api:            chalk.blue,
-    frontend:       chalk.green,
-    config:         chalk.gray,
+const LAYER_COLOR: Record<string, (value: string) => string> = {
+    database: chalk.yellow,
+    backend: chalk.cyan,
+    api: chalk.blue,
+    frontend: chalk.green,
+    config: chalk.gray,
     infrastructure: chalk.magenta,
 };
 
-const COMPLEXITY_COLOR: Record<string, (s: string) => string> = {
-    low:    chalk.green,
+const COMPLEXITY_COLOR: Record<string, (value: string) => string> = {
+    low: chalk.green,
     medium: chalk.yellow,
-    high:   chalk.red,
+    high: chalk.red,
 };
 
 function layerStr(layer: string): string {
-    const fn = LAYER_COLOR[layer] ?? chalk.white;
-    return fn(`[${layer}]`);
+    return (LAYER_COLOR[layer] ?? chalk.white)(`[${layer}]`);
 }
 
-function printBlastRadius(report: BlastRadiusReport, rootDir: string): void {
-    const sep = chalk.gray('─'.repeat(60));
-
+function printBlastRadius(report: BlastRadiusReport): void {
+    const separator = chalk.gray('─'.repeat(60));
     console.log('');
     console.log(chalk.bold('Blast Radius Analysis'));
-    console.log(sep);
+    console.log(separator);
 
     if (report.totalFiles === 0) {
         console.log(chalk.yellow('  No affected files found in graph.'));
@@ -39,88 +37,93 @@ function printBlastRadius(report: BlastRadiusReport, rootDir: string): void {
         return;
     }
 
-    // Summary line
     const layerParts = Object.entries(report.layerBreakdown)
-        .map(([l, n]) => `${n} ${l}`)
+        .map(([layer, count]) => `${count} ${layer}`)
         .join(', ');
-    const complexityLabel = COMPLEXITY_COLOR[report.estimatedComplexity](report.estimatedComplexity.toUpperCase());
+    const complexityLabel = COMPLEXITY_COLOR[report.estimatedComplexity](
+        report.estimatedComplexity.toUpperCase(),
+    );
     console.log(`  ${chalk.bold(String(report.totalFiles))} files across ${chalk.white(layerParts)}`);
     console.log(`  Complexity: ${complexityLabel}`);
     console.log('');
 
-    // Execution plan
-    console.log(chalk.bold('Topologically Sorted Execution Plan'));
-    console.log(chalk.gray('  (leaf dependencies first — root executors last)'));
-    console.log(sep);
+    console.log(chalk.bold('Dependency-First Execution Plan'));
+    console.log(chalk.gray('  (dependency files before consumers when the typed dependency graph is acyclic)'));
+    console.log(separator);
 
-    const maxFileLen = Math.max(...report.affectedFiles.map(f => f.relativePath.length), 10);
-
+    const maxFileLen = Math.max(...report.affectedFiles.map(file => file.relativePath.length), 10);
     for (const file of report.affectedFiles) {
-        const orderStr = chalk.gray(`[${String(file.executionOrder).padStart(2, ' ')}]`);
+        const order = chalk.gray(`[${String(file.executionOrder).padStart(2, ' ')}]`);
         const rootMark = file.isRoot ? chalk.cyan(' *') : '  ';
-        const relPadded = file.relativePath.padEnd(Math.min(maxFileLen, 52));
-        const layerTag = layerStr(file.layer).padEnd(16);
-        const hubs = file.dependentCount >= 5 ? chalk.red(` hub(${file.dependentCount} dependents)`) : '';
-        console.log(`  ${orderStr}${rootMark} ${chalk.white(relPadded)} ${layerTag}${hubs}`);
+        const rel = file.relativePath.padEnd(Math.min(maxFileLen, 52));
+        const layer = layerStr(file.layer).padEnd(16);
+        const hub = file.dependentCount >= 5
+            ? chalk.red(` hub(${file.dependentCount} dependents)`)
+            : '';
+        console.log(`  ${order}${rootMark} ${chalk.white(rel)} ${layer}${hub}`);
     }
 
-    // Legend
     console.log('');
-    console.log(chalk.gray('  * = root file directly involved in task'));
+    console.log(chalk.gray('  * = root file directly involved in the task'));
 
-    // Cross-layer warnings
     if (report.crossLayerWarnings.length > 0) {
         console.log('');
         console.log(chalk.bold.yellow('Architecture Warnings'));
-        console.log(sep);
-        for (const w of report.crossLayerWarnings) {
-            console.log(chalk.yellow(`  [!] ${w}`));
+        console.log(separator);
+        for (const warning of report.crossLayerWarnings) {
+            console.log(chalk.yellow(`  [!] ${warning}`));
         }
     }
 
-    // Cycle detection
     if (report.cycles.length > 0) {
         console.log('');
-        console.log(chalk.bold.red('Circular Dependencies Found'));
-        console.log(sep);
-        for (const c of report.cycles) {
-            console.log(chalk.red(`  [cycle] ${c}`));
-        }
+        console.log(chalk.bold.red('Dependency Cycles Found'));
+        console.log(separator);
+        for (const cycle of report.cycles) console.log(chalk.red(`  [cycle] ${cycle}`));
+        console.log(chalk.yellow('  A cycle has no valid total topological order and requires explicit review.'));
     } else if (report.totalFiles > 1) {
         console.log('');
-        console.log(chalk.green('  No circular dependencies detected.'));
+        console.log(chalk.green('  No dependency cycles detected in the affected subgraph.'));
     }
 }
 
 export function planCommand(): Command {
     return new Command('plan')
-        .description('Compute blast radius and topological execution plan for a task (no changes made)')
-        .argument('<task>', 'The task or file to analyze (natural language or file path)')
-        .option('--file <path>', 'Compute plan starting from a specific file instead of a task description')
-        .option('--depth <n>', 'Max BFS depth for dependency traversal', '4')
+        .description('Compute typed blast radius and dependency-first file ordering (no changes made)')
+        .argument('<task>', 'Natural-language task to analyze')
+        .option('--file <path>', 'Compute plan starting from a specific file instead of task discovery')
+        .option('--depth <n>', 'Override dependency traversal depth (1-50)')
         .action(async (task: string, opts: any) => {
             const ctx = await loadContext();
             if (!ctx) return;
 
             const { config, graph } = ctx;
-
             if (graph.nodes.size === 0) {
-                console.log(chalk.yellow('\n  Graph is empty. Run cos scan first to build the relationship graph.\n'));
+                console.log(chalk.yellow('\n  Graph is empty. Run cos scan first.\n'));
                 return;
             }
 
-            const spinner = ora('Computing blast radius...').start();
-            const planner = new TopologicalPlanner(graph, config.rootDir);
+            let depth: number | undefined;
+            if (opts.depth !== undefined) {
+                depth = Number.parseInt(String(opts.depth), 10);
+                if (!Number.isInteger(depth) || depth < 1 || depth > 50) {
+                    console.log(chalk.red('\n  --depth must be an integer from 1 to 50.\n'));
+                    return;
+                }
+            }
 
+            const spinner = ora('Computing typed blast radius...').start();
+            const planner = new TopologicalPlanner(graph, config.rootDir);
             let report: BlastRadiusReport;
+
             try {
                 if (opts.file) {
-                    const absPath = path.isAbsolute(opts.file)
-                        ? opts.file
+                    const absolutePath = path.isAbsolute(opts.file)
+                        ? path.resolve(opts.file)
                         : path.resolve(config.rootDir, opts.file);
-                    report = planner.planFromFiles([absPath]);
+                    report = planner.planFromFiles([absolutePath], depth);
                 } else {
-                    report = planner.planFromTask(task);
+                    report = planner.planFromTask(task, depth);
                 }
                 spinner.stop();
             } catch (err) {
@@ -128,25 +131,24 @@ export function planCommand(): Command {
                 return;
             }
 
-            // Header
             console.log('');
-            console.log(chalk.bold('Codebase OS — Topological Change Plan'));
+            console.log(chalk.bold('Codebase OS — Change Plan'));
             console.log(chalk.gray('─'.repeat(60)));
             console.log(`  Task:  ${chalk.cyan(task)}`);
             console.log(`  Root:  ${chalk.gray(config.rootDir)}`);
-            console.log(`  Graph: ${chalk.gray(graph.nodes.size + ' nodes, ' + graph.edges.size + ' edges')}`);
+            console.log(`  Graph: ${chalk.gray(`${graph.nodes.size} nodes, ${graph.edges.size} edges`)}`);
+            if (depth !== undefined) console.log(`  Depth: ${chalk.gray(String(depth))}`);
 
-            printBlastRadius(report, config.rootDir);
+            printBlastRadius(report);
 
-            // Actionable ending
             console.log('');
             console.log(chalk.gray('─'.repeat(60)));
             if (report.totalFiles > 0) {
-                console.log(chalk.bold('  To execute this plan:'));
+                console.log(chalk.bold('  To start an evidence-gated agent session:'));
                 console.log(`    ${chalk.cyan(`cos agent "${task}"`)}`);
                 console.log('');
-                console.log(chalk.gray('  The agent will execute files in the order shown above,'));
-                console.log(chalk.gray('  verifying each change before proceeding to the next.'));
+                console.log(chalk.gray('  The agent receives this ordering as planning context;'));
+                console.log(chalk.gray('  runtime verification—not the model—decides whether the task is complete.'));
             }
             console.log('');
         });

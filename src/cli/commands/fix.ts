@@ -3,207 +3,134 @@ import chalk from 'chalk';
 import inquirer from 'inquirer';
 import ora from 'ora';
 import path from 'path';
-import { loadContext } from '../context.js';
-import { AIProviderFactory } from '../../core/ai/AIProviderFactory.js';
-import { ChangeExecutor } from '../../core/ai/ChangeExecutor.js';
-import { ErrorDetector } from '../../core/diagnostics/ErrorDetector.js';
-import { DecisionEngine } from '../../core/ai/DecisionEngine.js';
-import type { AITask } from '../../types/index.js';
 import { v4 as uuidv4 } from 'uuid';
-import { logger } from '../../utils/logger.js';
+import { loadContext } from '../context.js';
+import { ErrorDetector } from '../../core/diagnostics/ErrorDetector.js';
+import { AgentLoop } from '../../core/ai/AgentLoop.js';
 import { RichFormatter } from '../../core/output/RichFormatter.js';
-import { StaticPatternLibrary } from '../../core/diagnostics/StaticPatternLibrary.js';
-import { FailureManager } from '../../core/diagnostics/FailureManager.js';
-import { FailureStore } from '../../core/failure/FailureStore.js';
-import { TestRunner } from '../../core/diagnostics/TestRunner.js';
 
 export function fixCommand(): Command {
     return new Command('fix')
-        .description('Detect and AI-fix errors across your project')
-        .argument('[file]', 'Specific file to fix (optional)')
-        .option('--all', 'Scan and fix all files in the project')
-        .option('--dry-run', 'Show what would be fixed without applying changes')
-        .option('--yes', 'Auto-approve all permission requests')
-        .option('--no-verify', 'Skip re-running diagnostics after fixes are applied')
+        .description('Detect supported diagnostics and repair them through the transactional, independently verified AgentLoop')
+        .argument('[file]', 'Specific repository-relative file to diagnose and repair')
+        .option('--all', 'Explicitly diagnose the whole supported project surface')
+        .option('--dry-run', 'Run and display diagnostics only; do not modify files')
+        .option('--yes', 'Skip the repair confirmation prompt')
+        .option('--max-steps <n>', 'Maximum autonomous repair steps', '50')
         .action(async (file: string | undefined, opts: any) => {
             const ctx = await loadContext();
             if (!ctx) return;
+            const { config, db, graph, store, aiProvider } = ctx;
 
-            const { config, history, sessionId, graph, db } = ctx;
-
-            let provider;
-            try {
-                provider = AIProviderFactory.create(config);
-            } catch (err) {
-                console.log(chalk.red(`AI provider error: ${String(err)}`));
-                process.exit(1);
+            let filePaths: string[] | undefined;
+            if (file) {
+                const absolute = path.resolve(config.rootDir, file);
+                const relative = path.relative(config.rootDir, absolute);
+                if (relative.startsWith('..') || path.isAbsolute(relative)) {
+                    console.log(chalk.red('The requested file must be inside the initialized project root.'));
+                    process.exitCode = 1;
+                    return;
+                }
+                filePaths = [absolute];
             }
 
             const detector = new ErrorDetector(config.rootDir);
-            const decisionEngine = new DecisionEngine(graph);
-
-            // Step 1 — Run diagnostics
-            const spinnerScan = ora('Running diagnostics...').start();
+            const spinner = ora('Running supported diagnostics...').start();
             let reports;
             try {
-                const filePaths = file ? [path.resolve(process.cwd(), file)] : undefined;
                 reports = await detector.runAll(filePaths);
-                const totalErrors = reports.reduce((s, r) => s + r.errors.length, 0);
-                const totalWarnings = reports.reduce((s, r) => s + r.warnings.length, 0);
-                if (totalErrors + totalWarnings === 0) {
-                    spinnerScan.succeed(chalk.green('No errors detected. Project looks clean.'));
-                    return;
-                }
-                spinnerScan.succeed(`Found ${chalk.red(String(totalErrors))} error(s) and ${chalk.yellow(String(totalWarnings))} warning(s)`);
             } catch (err) {
-                spinnerScan.fail(`Diagnostics failed: ${String(err)}`);
+                spinner.fail(`Diagnostics failed: ${String(err)}`);
+                process.exitCode = 1;
                 return;
             }
 
-            // Step 2 — Display errors
+            const totalErrors = reports.reduce((sum, report) => sum + report.errors.length, 0);
+            const totalWarnings = reports.reduce((sum, report) => sum + report.warnings.length, 0);
+            if (totalErrors + totalWarnings === 0) {
+                spinner.succeed(chalk.green('No supported diagnostics were reported.'));
+                return;
+            }
+            spinner.succeed(`Found ${totalErrors} error(s) and ${totalWarnings} warning(s).`);
+
             console.log('');
-            console.log(chalk.bold('Diagnostic Report:'));
+            console.log(chalk.bold('Diagnostic Report'));
             console.log(RichFormatter.formatDiagnostics(reports, config.rootDir));
 
-            const byFile = detector.groupByFile(reports);
-
-            // Step 3 — Build and execute fixing pipeline
-            const executor = new ChangeExecutor(provider, config, history, sessionId);
-            const patternLibrary = new StaticPatternLibrary(config.rootDir);
-            const failureStore = new FailureStore(db);
-            const failureManager = new FailureManager(db, history, failureStore);
-            const testRunner = new TestRunner(config.rootDir, graph);
-
-            const concurrency = 3; // Lower concurrency for stability
-            const results: any[] = [];
-            const entries = Array.from(byFile.entries());
-
-            // Process files in batches to respect concurrency
-            for (let i = 0; i < entries.length; i += concurrency) {
-                const chunk = entries.slice(i, i + concurrency);
-                await Promise.all(chunk.map(async ([filePath, diags]) => {
-                    const rel = path.relative(config.rootDir, filePath);
-                    const errorSummary = diags
-                        .filter(d => d.severity === 'error')
-                        .map(d => `Line ${d.line}: [${d.code ?? d.tool}] ${d.message}`)
-                        .join('\n');
-
-                    if (!errorSummary) return;
-
-                    const spinner = ora(`Processing: ${rel}`).start();
-                    
-                    try {
-                        // Stage 1: Static Pattern Fixes
-                        let fixedByPattern = false;
-                        if (!opts.dryRun) {
-                            for (const diag of diags) {
-                                if (await patternLibrary.applyFix(diag)) {
-                                    fixedByPattern = true;
-                                }
-                            }
-                        }
-
-                        if (fixedByPattern) {
-                            spinner.text = `Applied static fixes: ${rel}`;
-                        }
-
-                        // Stage 2: AI Fixes
-                        const task: AITask = {
-                            id: uuidv4(),
-                            kind: 'fix',
-                            description: `Fix ${diags.filter(d => d.severity === 'error').length} error(s) in this file`,
-                            targetFile: filePath,
-                            context: `The following errors were detected by static analysis:\n${errorSummary}`,
-                            constraints: [
-                                'Fix ONLY the listed errors — do not change unrelated code',
-                                'Maintain existing code style, imports, and structure',
-                                'Do not add new dependencies',
-                                'Ensure the file remains syntactically valid after the fix',
-                            ],
-                            expectedOutput: 'The same file with all listed errors resolved',
-                            priority: 10,
-                        };
-
-                        const result = await executor.execute(task, opts.dryRun as boolean ?? false);
-
-                        if (!result.success) {
-                            spinner.fail(`AI Fix Failed: ${rel}`);
-                            await failureManager.handleFailure('parse_error', filePath, result.validationErrors.join('\n'));
-                            results.push({ result, filePath });
-                            return;
-                        }
-
-                        spinner.stop();
-
-                        const diffLines = result.diff.split('\n').length;
-                        const evaluation = decisionEngine.evaluate('write_file', filePath, diffLines, result.confidence);
-                        const allowed = await decisionEngine.enforce('AI Auto-Fix', filePath, evaluation);
-
-                        if (allowed && !opts.dryRun) {
-                            executor.apply(task, result);
-                            
-                            // Stage 3: Semantic Validation & Partial Tests
-                            const reVerify = await detector.runAll([filePath]);
-                            const newErrors = reVerify.reduce((acc, r) => acc + r.errors.length, 0);
-                            
-                            if (newErrors > 0) {
-                                await failureManager.handleFailure('parse_error', filePath, `Found ${newErrors} regressions after fix.`);
-                                result.success = false;
-                            } else {
-                                // Run impacted tests
-                                const testResults = await testRunner.runImpactedTests(filePath);
-                                const failures = testResults.filter(t => !t.success);
-                                
-                                if (failures.length > 0) {
-                                    const details = failures.map(f => `${f.testFile}: ${f.output}`).join('\n');
-                                    await failureManager.handleFailure('test_regression', filePath, details);
-                                    result.success = false;
-                                } else {
-                                    console.log(chalk.green(`  ✔ Fixed ${rel} — Verification passed`));
-                                }
-                            }
-                        } else if (!allowed) {
-                            console.log(chalk.yellow(`  Skipped: ${rel}`));
-                            result.success = false;
-                        }
-
-                        results.push({ result, filePath });
-                    } catch (err) {
-                        spinner.fail(`Error: ${rel} - ${String(err)}`);
-                        logger.error('fix task failed', { file: filePath, error: String(err) });
-                    }
-                }));
-            }
-
-            // Step 5 — Summary
-            const applied = results.filter(r => r.result.success && r.result.appliedAt);
-            const failed = results.filter(r => !r.result.success);
-
-            console.log('');
-            console.log(chalk.bold('Fix Summary:'));
-            console.log(`  ${chalk.green(String(applied.length))} file(s) fixed   ${chalk.red(String(failed.length))} failed`);
             if (opts.dryRun) {
-                console.log(chalk.cyan('  Note: Dry run — no physical changes were made.'));
+                console.log(chalk.cyan('\nDry run complete. No files were modified.\n'));
                 return;
             }
 
-            // Step 6 — Re-verify (optional)
-            if (!opts.noVerify && applied.length > 0) {
-                console.log('');
-                const recheck = ora('Re-running global verification...').start();
-                try {
-                    const fixedFiles = applied.map(r => r.filePath);
-                    const recheckReports = await detector.runAll(fixedFiles);
-                    const remaining = recheckReports.reduce((s, r) => s + r.errors.length, 0);
-                    if (remaining === 0) {
-                        recheck.succeed(chalk.green('All errors resolved!'));
-                    } else {
-                        recheck.warn(`${remaining} error(s) remain. Run 'cos fix' again or fix manually.`);
-                    }
-                } catch (err) {
-                    recheck.fail(`Re-verification failed: ${String(err)}`);
+            const diagnostics = [...detector.groupByFile(reports).entries()]
+                .map(([diagnosticFile, items]) => {
+                    const relative = diagnosticFile
+                        ? path.relative(config.rootDir, diagnosticFile).replace(/\\/g, '/')
+                        : '(tool-level diagnostic)';
+                    const lines = items.slice(0, 40).map(item =>
+                        `  - ${item.severity.toUpperCase()} line ${item.line}:${item.column} ` +
+                        `[${item.code ?? item.tool}] ${item.message}`,
+                    );
+                    return `${relative}\n${lines.join('\n')}`;
+                })
+                .join('\n\n')
+                .slice(0, 18000);
+
+            if (!opts.yes) {
+                const { proceed } = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'proceed',
+                    message: `Run a verified repair pass for these ${totalErrors + totalWarnings} diagnostic(s)?`,
+                    default: false,
+                }]);
+                if (!proceed) {
+                    console.log(chalk.yellow('Repair cancelled.'));
+                    return;
                 }
             }
+
+            const scope = file
+                ? `The user explicitly scoped this repair to ${file}. Do not modify unrelated files unless required to preserve compilation/runtime contracts.`
+                : 'Repair only files required to resolve the diagnostics. Do not perform opportunistic refactors.';
+            const task =
+                `Resolve the following diagnostics in the current repository. ${scope}\n\n` +
+                `DIAGNOSTICS:\n${diagnostics}\n\n` +
+                `Requirements:\n` +
+                `- reproduce/inspect the relevant code before modifying it;\n` +
+                `- make the smallest semantically correct changes;\n` +
+                `- do not add dependencies unless the diagnostics cannot be solved correctly without one;\n` +
+                `- do not suppress errors with unsafe casts, ignored checks, disabled lint rules, or test deletion unless the user explicitly requested that behavior;\n` +
+                `- when the repair is complete, request finish. Codebase OS will independently run the repository's verification gates.`;
+
+            const maxSteps = Math.min(120, Math.max(1, Number.parseInt(String(opts.maxSteps), 10) || 50));
+            const agent = new AgentLoop(aiProvider, config.rootDir, db, uuidv4(), graph, store);
+            const result = await agent.run(task, {
+                maxSteps,
+                onStep: async (step, action, toolResult) => {
+                    if (toolResult.isStreaming) {
+                        process.stdout.write(chalk.gray(String(toolResult.output || '')));
+                        return;
+                    }
+                    const target = action.args?.path || action.args?.oldPath || action.args?.command || '';
+                    console.log(
+                        `  ${chalk.gray(`[${step}]`)} ${chalk.cyan(String(action.tool).toUpperCase())} ` +
+                        `${chalk.gray(target)} ${toolResult.success ? chalk.green('OK') : chalk.red('FAIL')}`,
+                    );
+                    if (!toolResult.success && toolResult.error) {
+                        console.log(chalk.red(`       ${String(toolResult.error).slice(0, 220)}`));
+                    }
+                },
+            });
+
+            console.log('');
+            console.log(result.success
+                ? chalk.green.bold('VERIFIED REPAIR COMPLETE')
+                : chalk.yellow.bold('REPAIR INCOMPLETE / NOT VERIFIED'));
+            console.log(`  ${result.summary}`);
+            if (result.verificationCommands.length > 0) {
+                console.log(chalk.gray(`  Verification: ${result.verificationCommands.join(' | ')}`));
+            }
+            if (!result.success) process.exitCode = 1;
+            console.log('');
         });
 }
-

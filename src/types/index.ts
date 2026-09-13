@@ -227,10 +227,9 @@ export interface StaticFixRule {
     id: string;
     tool: string;
     code?: string;
-    messagePattern: string; // regex string
+    messagePattern: string;
     description: string;
 }
-
 
 // ─── AI Orchestration Types ──────────────────────────────────────────────────
 
@@ -269,7 +268,6 @@ export interface AIProvider {
     listModels?(): Promise<string[]>;
     isAvailable(): Promise<boolean>;
 }
-
 
 export interface AICompletionRequest {
     systemPrompt: string;
@@ -404,6 +402,8 @@ export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 
 // ─── Change History ───────────────────────────────────────────────────────────
 
+export type ChangeOperation = 'modify' | 'create' | 'delete' | 'move';
+
 export interface ChangeRecord {
     id: string;
     sessionId: string;
@@ -418,6 +418,9 @@ export interface ChangeRecord {
     provider: AIProviderKind;
     confidence: number;
     impactReportId?: string;
+    operation?: ChangeOperation;
+    /** Original path for a move; filePath stores the destination path. */
+    sourcePath?: string;
 }
 
 // ─── Scanner Types ────────────────────────────────────────────────────────────

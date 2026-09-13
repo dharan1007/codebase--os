@@ -1,52 +1,92 @@
-# Codebase OS — Public Release Guide
+# Codebase OS — Release Procedure
 
-Congratulations! Your project is now live on GitHub: `https://github.com/dharan1007/codebase--os.git`.
+Publishing is the final step of a verified release, not the verification step itself. Do not publish from a dirty working tree or from a commit whose GitHub Actions CI is red/pending.
 
-This guide explains how to maintain the project and how to reach even more users by publishing to the global NPM registry.
+## Release prerequisites
 
-## 1. Publishing to NPM (Optional)
-If you want people to be able to run `npm install -g codebase-os`, follow these steps:
+Before tagging or publishing a version:
 
-1. **Create an account** at [npmjs.com](https://www.npmjs.com/).
-2. **Login** in your terminal:
-   ```bash
-   npm login
-   ```
-3. **Check the name**: Ensure the `"name"` in `package.json` is unique. If `codebase-os` is taken, you might need to use a scope like `@dharan1007/codebase-os`.
-4. **Publish**:
-   ```bash
-   npm publish
-   ```
+1. The intended release commit is on a reviewed branch/PR.
+2. GitHub Actions CI is green for the exact commit.
+3. `npm run verify` succeeds from a clean checkout.
+4. `npm pack --dry-run` contains only the intended package files.
+5. README, SECURITY, LICENSE and `.env.example` match the implementation.
+6. No active credentials or local `.cos` state are present in the package/repository diff.
+7. Any compatibility/model-default change has been checked against provider documentation or live model discovery.
+8. The version/changelog accurately describes breaking behavior.
 
-## 2. Direct Installation for Users
-Even without NPM, people can use your tool immediately by cloning or using `npx`. 
+## Local release verification
 
-**The standard installation for users is:**
+Use a clean clone or clean worktree:
+
 ```bash
-# Method 1: Global Install (cloned)
-git clone https://github.com/dharan1007/codebase--os.git
-cd codebase--os
-npm install
-npm run build
-npm link
-
-# Method 2: Global Install (from GitHub directly)
-npm install -g https://github.com/dharan1007/codebase--os.git
+npm ci
+npm run verify
+npm pack --dry-run
 ```
 
-## 3. Maintenance
-- **Issues**: Keep an eye on the "Issues" tab on GitHub. I've already added templates to help users provide good bug reports.
-- **PRs**: Other developers can now send you "Pull Requests" to improve the code. Review them in the "Pull Requests" tab.
-- **Security**: If anyone reports a security bug at `dharan.poduvu@gmail.com`, please address it promptly to keep the community safe.
+`npm run verify` executes typecheck, production build and the integration/regression tests. `prepublishOnly` invokes the same verification gate automatically, but that is a backstop rather than a replacement for reviewing the result.
 
-## 4. Updates
-When you make changes locally:
+## Package inspection
+
+`package.json` restricts the package payload to the compiled distribution and release documentation. Still inspect the dry-run output before every release:
+
 ```bash
-git add .
-git commit -m "Description of change"
-git push origin main
+npm pack --dry-run
 ```
 
----
+Reject the release if the payload contains development state, source credentials, `.env`, `.cos`, repository metadata, test fixtures containing secrets, or unexpected generated files.
 
-**You are now the maintainer of a world-class AI agent project. Good luck!**
+## Versioning
+
+Update the package version intentionally according to compatibility impact. Do not change versions merely to force a publish.
+
+Example:
+
+```bash
+npm version patch   # compatible fixes
+npm version minor   # backward-compatible capability
+npm version major   # breaking CLI/storage/behavior contract
+```
+
+Review the generated version commit/tag before pushing it.
+
+## npm publication
+
+Authenticate using an npm account with MFA/appropriate publishing policy:
+
+```bash
+npm login
+npm whoami
+npm publish
+```
+
+If the unscoped package name is unavailable, choose and document a stable package scope rather than repeatedly renaming published artifacts.
+
+The repository license is proprietary. Publishing to npm does not change the license or grant rights beyond `LICENSE`.
+
+## Git tag / GitHub release
+
+Create a release only for the commit that passed CI and package inspection. Release notes should include:
+
+- user-visible changes;
+- breaking changes/migrations;
+- security changes;
+- supported Node/Docker requirements;
+- known limitations;
+- verification evidence/CI commit.
+
+## Rollback of a bad release
+
+Do not silently overwrite an npm version. If a release is faulty:
+
+1. stop promoting the affected version;
+2. document the impact;
+3. fix on a branch;
+4. run the complete verification gate;
+5. publish a new version;
+6. deprecate the faulty npm version if appropriate.
+
+## Branch protection recommendation
+
+For `main`, require the CI workflow and review before merge when Codebase OS is being used as a production tool. Avoid direct pushes that bypass the same gate used for releases.

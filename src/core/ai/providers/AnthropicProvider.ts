@@ -2,9 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { AIProvider, ModelRequest, ModelResponse, AIProviderKind } from '../../../types/index.js';
 import { logger } from '../../../utils/logger.js';
 import { RateLimiter } from '../../../utils/RateLimiter.js';
-import { classifyProviderError, ProviderError, RETRYABLE_CODES } from './ProviderError.js';
+import { classifyProviderError } from './ProviderError.js';
 
-/** Max retry attempts for retryable errors (rate limits, server errors). */
 const MAX_RETRIES = 4;
 const BASE_DELAY_MS = 1000;
 
@@ -14,18 +13,16 @@ export class AnthropicProvider implements AIProvider {
     private defaultModel: string;
     private limiter: RateLimiter;
 
-    constructor(apiKey: string, model = 'claude-3-5-sonnet-latest') {
+    constructor(private apiKey: string, model = 'claude-opus-4-1-20250805') {
         this.client = new Anthropic({
             apiKey,
-            timeout: 300_000, // 5-minute timeout for large codegen tasks
+            timeout: 300_000,
         });
         this.defaultModel = model;
 
-        // RPM is configurable via env var for paid tier users (default: 50 for Tier 1).
-        // Free tier is 5 RPM — set ANTHROPIC_RPM=5 in .env if on free tier.
-        const rpm = parseInt(process.env['ANTHROPIC_RPM'] ?? '50', 10);
+        const rpm = this.positiveInt(process.env['ANTHROPIC_RPM'], 40);
         this.limiter = new RateLimiter({
-            maxConcurrency: 3,
+            maxConcurrency: Math.min(3, this.positiveInt(process.env['ANTHROPIC_MAX_CONCURRENCY'], 3)),
             requestsPerMinute: rpm,
             delayBetweenRequestsMs: Math.ceil(60_000 / rpm),
             circuitBreakerThreshold: 5,
@@ -36,14 +33,14 @@ export class AnthropicProvider implements AIProvider {
     }
 
     async execute(request: ModelRequest): Promise<ModelResponse> {
-        return this.limiter.execute(async () => {
-            return RateLimiter.withRetry(
+        return this.limiter.execute(async () =>
+            RateLimiter.withRetry(
                 () => this.callAPI(request),
                 MAX_RETRIES,
                 BASE_DELAY_MS,
-                'anthropic.execute'
-            );
-        });
+                'anthropic.execute',
+            ),
+        );
     }
 
     private async callAPI(request: ModelRequest): Promise<ModelResponse> {
@@ -59,8 +56,11 @@ export class AnthropicProvider implements AIProvider {
 
             const content = response.content
                 .filter((block: any) => block.type === 'text')
-                .map((block: any) => (block as { type: 'text'; text: string }).text)
+                .map((block: any) => String(block.text ?? ''))
                 .join('');
+            if (!content.trim()) {
+                throw new Error('Anthropic returned an empty text response.');
+            }
 
             return {
                 content,
@@ -85,32 +85,38 @@ export class AnthropicProvider implements AIProvider {
     }
 
     async isAvailable(): Promise<boolean> {
-        // Real ping: attempt a minimal 1-token completion
+        if (!this.apiKey.trim()) return false;
         try {
             await this.client.messages.create({
                 model: this.defaultModel,
-                max_tokens: 5,
-                messages: [{ role: 'user', content: 'ping' }],
+                max_tokens: 1,
+                messages: [{ role: 'user', content: 'Reply with one character.' }],
             });
             return true;
         } catch (err) {
             const classified = classifyProviderError(err, 'anthropic');
-            // AUTH_ERROR and MODEL_NOT_FOUND mean config is broken, not that the provider is down
-            if (classified.code === 'AUTH_ERROR') {
-                logger.warn('Anthropic: Invalid API key');
+            if (classified.code === 'AUTH_ERROR') logger.warn('Anthropic: invalid API key');
+            if (classified.code === 'MODEL_NOT_FOUND') {
+                logger.warn('Anthropic: configured model is unavailable', { model: this.defaultModel });
             }
             return false;
         }
     }
 
     async listModels(): Promise<string[]> {
-        return [
-            'claude-3-5-sonnet-latest',
-            'claude-3-5-haiku-latest',
-            'claude-3-opus-latest',
-            'claude-3-opus-20240229',
-            'claude-3-sonnet-20240229',
-            'claude-3-haiku-20240307',
-        ];
+        // The installed SDK version predates Anthropic's model-discovery helper.
+        // Return only configured production defaults rather than advertising stale
+        // or deprecated models. Operators can override them through ModelRegistry.
+        const models = new Set<string>([
+            this.defaultModel,
+            process.env['COS_ANTHROPIC_REASONING_HIGH_MODEL'] || '',
+            process.env['COS_ANTHROPIC_REASONING_FAST_MODEL'] || 'claude-sonnet-4-20250514',
+        ]);
+        return [...models].filter(Boolean);
+    }
+
+    private positiveInt(value: string | undefined, fallback: number): number {
+        const parsed = Number.parseInt(value ?? '', 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
     }
 }
