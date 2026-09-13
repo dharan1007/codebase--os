@@ -11,7 +11,7 @@ test('v1 release contract is documented and linked from the README', () => {
   const contractPath = path.join(root, 'docs', 'RELEASE_CONTRACT.md');
   assert.equal(fs.existsSync(contractPath), true);
   const contract = fs.readFileSync(contractPath, 'utf8');
-  assert.match(contract, /Node(?:\.js)? 20.*22|Node 20 and 22/i);
+  assert.match(contract, /Node(?:\.js)? 22.*24|Node 22 and 24/i);
   assert.match(contract, /Docker/i);
   assert.match(contract, /SQLite/i);
   assert.match(contract, /independent verification/i);
