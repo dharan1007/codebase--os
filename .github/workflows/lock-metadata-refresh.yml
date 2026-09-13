@@ -1,0 +1,48 @@
+name: One-time lock metadata refresh
+
+on:
+  push:
+    branches:
+      - agent/production-hardening-final
+    paths:
+      - .github/lock-metadata-refresh-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor == 'dharan1007'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/production-hardening-final
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Refresh lock metadata from manifest
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Ensure manifest was not rewritten
+        run: git diff --exit-code -- package.json
+      - name: Clean install refreshed lock
+        run: npm ci
+      - name: Verify source and regressions
+        run: npm run verify
+      - name: Verify production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+      - name: Verify packed artifact
+        run: npm run package:smoke
+      - name: Check patch hygiene
+        run: git diff --check
+      - name: Commit refreshed lock metadata
+        shell: bash
+        run: |
+          git config user.name "codebase-os-release-bot"
+          git config user.email "150376358+dharan1007@users.noreply.github.com"
+          git add package-lock.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore: align lockfile runtime metadata"
+          git push origin HEAD:agent/production-hardening-final
