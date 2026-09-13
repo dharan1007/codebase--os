@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/dharan1007/codebase--os/actions/workflows/ci.yml/badge.svg)](https://github.com/dharan1007/codebase--os/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Node](https://img.shields.io/badge/Node-20%20%7C%2022-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/Node-22%20%7C%2024-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![License](https://img.shields.io/badge/License-Proprietary-6b7280?style=flat-square)](LICENSE)
 
 **Codebase OS is a local software-change runtime for AI-assisted engineering.** It combines repository scanning, a persistent typed relationship graph, dependency-first planning, transactional file mutation, durable engineering memory, isolated command execution, independent verification, and conflict-safe rollback.
@@ -119,7 +119,7 @@ If code changed and no credible verification strategy can be discovered, complet
 
 Prerequisites:
 
-- Node.js 20 or 22
+- Node.js 22 or 24
 - Git
 - Docker for isolated autonomous command execution
 
@@ -216,13 +216,13 @@ The dashboard binds only to `127.0.0.1`, applies browser security headers, const
 
 ## CI and release gate
 
-The repository CI qualifies Node 20 and Node 22 on Ubuntu, Windows and macOS. Every matrix cell runs a locked install plus typecheck, production build and tests. Canonical Ubuntu/Node 20 qualification also inspects the npm publish payload and installs the packed tarball into a clean temporary prefix before running the packaged `cos --help` entrypoint.
+The repository CI qualifies Node 22 and Node 24 on Ubuntu, Windows and macOS. Every matrix cell runs a locked install plus typecheck, production build and tests. Canonical Ubuntu/Node 22 qualification also inspects the npm publish payload and installs the packed tarball into a clean temporary prefix before running the packaged `cos --help` entrypoint.
 
 ```text
 npm ci
 npm run verify
-npm pack --dry-run        # canonical Ubuntu/Node 20
-npm run package:smoke     # canonical Ubuntu/Node 20
+npm pack --dry-run        # canonical Ubuntu/Node 22
+npm run package:smoke     # canonical Ubuntu/Node 22
 ```
 
 `npm run verify` combines typecheck, build and tests, and `prepublishOnly` executes the same verification gate.
