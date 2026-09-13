@@ -8,6 +8,7 @@ const { readFileTool } = require('../dist/core/ai/tools/localTools.js');
 const { MutationTransaction } = require('../dist/core/ai/MutationTransaction.js');
 const { RelationshipGraph } = require('../dist/core/graph/RelationshipGraph.js');
 const { TrafficController } = require('../dist/core/orchestrator/TrafficController.js');
+const { SandboxManager } = require('../dist/core/sandbox/SandboxManager.js');
 
 function tempRoot(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cos-security-runtime-'));
@@ -52,6 +53,44 @@ test('native read_file denies secrets but permits template files', async t => {
   const template = await readFileTool('.env.example', root);
   assert.equal(template.success, true);
   assert.match(template.output, /REAL_SECRET=/);
+});
+
+test('sandbox rejects shell control, traversal, absolute paths and credential-shaped arguments before execution', async t => {
+  const root = tempRoot(t);
+  const sandbox = new SandboxManager(root);
+  const blocked = [
+    'node -e "process.exit(0)"; echo owned',
+    'cat ../../etc/passwd',
+    'cat /etc/passwd',
+    'cat .env',
+    'echo $(whoami)',
+    'echo `whoami`',
+    'echo hello && echo world',
+  ];
+
+  for (const command of blocked) {
+    const result = await sandbox.execute(command);
+    assert.equal(result.success, false, `expected command to be blocked: ${command}`);
+    assert.match(result.error || '', /SANDBOX BLOCKED/, `expected block reason for: ${command}`);
+  }
+});
+
+test('sandbox fails closed when Docker is unavailable unless reduced-isolation mode is explicitly enabled', async t => {
+  const root = tempRoot(t);
+  const sandbox = new SandboxManager(root);
+  sandbox.dockerAvailable = false;
+
+  const previous = process.env.COS_ALLOW_NATIVE_SANDBOX;
+  delete process.env.COS_ALLOW_NATIVE_SANDBOX;
+  t.after(() => {
+    if (previous === undefined) delete process.env.COS_ALLOW_NATIVE_SANDBOX;
+    else process.env.COS_ALLOW_NATIVE_SANDBOX = previous;
+  });
+
+  const result = await sandbox.execute('echo hello');
+  assert.equal(result.success, false);
+  assert.match(result.error || '', /Docker is unavailable/);
+  assert.match(result.error || '', /disabled by default/);
 });
 
 test('mutation transaction compensates a created file when history persistence fails', async t => {
