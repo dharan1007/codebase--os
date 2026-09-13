@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node: [20, 22]
+        node: [22, 24]
 
     steps:
       - name: Checkout
@@ -44,9 +44,9 @@ jobs:
         run: npm run verify
 
       - name: Verify publish payload
-        if: matrix.os == 'ubuntu-latest' && matrix.node == 20
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
         run: npm pack --dry-run
 
       - name: Install and smoke-test packed CLI
-        if: matrix.os == 'ubuntu-latest' && matrix.node == 20
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
         run: npm run package:smoke
