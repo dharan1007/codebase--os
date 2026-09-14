@@ -1,0 +1,182 @@
+name: Apply scheduler reliability patch
+
+on:
+  push:
+    branches:
+      - agent/production-assurance-v2
+    paths:
+      - .github/workflows/assurance-scheduler-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/production-assurance-v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Patch scheduler request model
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/orchestrator/TrafficController.ts')
+          s = p.read_text()
+          s = s.replace("import { ProviderHealthTracker } from './ProviderHealthTracker.js';\n", "import { ProviderHealthTracker } from './ProviderHealthTracker.js';\nimport { ProviderError, classifyProviderError } from '../ai/providers/ProviderError.js';\n", 1)
+          s = s.replace("};\n\nexport interface AIRequest {\n", "};\n\ntype RequestDetails = ModelRequest & { timeoutMs?: number; signal?: AbortSignal };\n\nexport interface AIRequest {\n", 1)
+          s = s.replace('    requestDetails: ModelRequest;\n', '    requestDetails: RequestDetails;\n', 1)
+          s = s.replace('    deadlineAt: number;\n    lastError?: string;\n', '    deadlineAt: number;\n    fatalProviders: Set<AIProviderKind>;\n    lastError?: string;\n', 1)
+          s = s.replace("    static calculateDelay(round: number): number {\n        const cap = Math.min(SYSTEM_CONFIG.CAP_BACKOFF_MS, SYSTEM_CONFIG.BASE_BACKOFF_MS * Math.pow(2, round));\n        return Math.floor(cap / 2 + Math.random() * cap / 2);\n    }", "    static calculateDelay(round: number, retryAfterMs?: number): number {\n        if (Number.isFinite(retryAfterMs) && retryAfterMs! >= 0) return Math.floor(retryAfterMs!);\n        const cap = Math.min(SYSTEM_CONFIG.CAP_BACKOFF_MS, SYSTEM_CONFIG.BASE_BACKOFF_MS * Math.pow(2, round));\n        return Math.floor(cap / 2 + Math.random() * cap / 2);\n    }")
+          old = """        const estimatedTokens = TokenEstimator.estimate(this.contextText(requestDetails.context));\n        if (estimatedTokens > SYSTEM_CONFIG.MAX_PAYLOAD_TOKENS) {\n            throw new Error(\n                `PAYLOAD_TOO_LARGE: estimated ${estimatedTokens} tokens exceeds scheduler limit ${SYSTEM_CONFIG.MAX_PAYLOAD_TOKENS}.`,\n            );\n        }\n\n        const now = Date.now();\n        return new Promise<ModelResponse>((resolve, reject) => {\n            this.queue.push({\n                id: crypto.randomUUID(),\n                requestDetails,\n                providerSequence: sequence,\n                providerIndex: 0,\n                round: 0,\n                estimatedTokens,\n                enqueuedAt: now,\n                deadlineAt: now + SYSTEM_CONFIG.REQUEST_DEADLINE_MS,\n                resolve,\n                reject,\n            });\n"""
+          new = """        const details = requestDetails as RequestDetails;\n        if (details.signal?.aborted) throw new Error('PROVIDER_CANCELLED: request was cancelled.');\n        const estimatedTokens = TokenEstimator.estimate(this.contextText(details.context));\n        if (estimatedTokens > SYSTEM_CONFIG.MAX_PAYLOAD_TOKENS) {\n            throw new Error(\n                `PAYLOAD_TOO_LARGE: estimated ${estimatedTokens} tokens exceeds scheduler limit ${SYSTEM_CONFIG.MAX_PAYLOAD_TOKENS}.`,\n            );\n        }\n\n        const now = Date.now();\n        const timeoutMs = this.positiveInt(details.timeoutMs, SYSTEM_CONFIG.REQUEST_DEADLINE_MS);\n        return new Promise<ModelResponse>((resolve, reject) => {\n            this.queue.push({\n                id: crypto.randomUUID(),\n                requestDetails: details,\n                providerSequence: sequence,\n                providerIndex: 0,\n                round: 0,\n                estimatedTokens,\n                enqueuedAt: now,\n                deadlineAt: now + timeoutMs,\n                fatalProviders: new Set<AIProviderKind>(),\n                resolve,\n                reject,\n            });\n"""
+          if old not in s: raise SystemExit('schedule anchor not found')
+          s = s.replace(old, new, 1)
+          old = """        const request = this.queue[0]!;\n        if (Date.now() >= request.deadlineAt) {\n"""
+          new = """        const request = this.queue[0]!;\n        if (request.requestDetails.signal?.aborted) {\n            this.queue.shift();\n            request.reject(new Error('PROVIDER_CANCELLED: request was cancelled.'));\n            return;\n        }\n        if (Date.now() >= request.deadlineAt) {\n"""
+          if old not in s: raise SystemExit('dispatch anchor not found')
+          s = s.replace(old, new, 1)
+          old = """    private selectHealthyProvider(request: AIRequest): { provider: AIProviderKind; index: number } | null {\n        for (let offset = 0; offset < request.providerSequence.length; offset++) {\n            const index = (request.providerIndex + offset) % request.providerSequence.length;\n            const provider = request.providerSequence[index]!;\n            if (this.healthTracker.isHealthy(provider)) return { provider, index };\n        }\n        return null;\n    }\n"""
+          new = """    private selectHealthyProvider(request: AIRequest): { provider: AIProviderKind; index: number } | null {\n        const model = request.requestDetails.modelOverride;\n        for (let offset = 0; offset < request.providerSequence.length; offset++) {\n            const index = (request.providerIndex + offset) % request.providerSequence.length;\n            const provider = request.providerSequence[index]!;\n            if (request.fatalProviders.has(provider)) continue;\n            if (this.healthTracker.isHealthy(provider, model)) return { provider, index };\n        }\n        return null;\n    }\n"""
+          if old not in s: raise SystemExit('selection anchor not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+      - name: Patch scheduler execution lifecycle
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/orchestrator/TrafficController.ts')
+          s = p.read_text()
+          a = s.index('    private async executeNetworkCall(')
+          b = s.index('    private rejectExpired(): void {', a)
+          replacement = r'''    private async executeNetworkCall(req: AIRequest, provider: AIProviderKind): Promise<void> {
+        const remaining = req.deadlineAt - Date.now();
+        if (remaining <= 0) {
+            this.finalizeRequest(req);
+            req.reject(this.deadlineError(req));
+            return;
+        }
+
+        const controller = new AbortController();
+        const sourceSignal = req.requestDetails.signal;
+        let sourceAbort: (() => void) | undefined;
+        if (sourceSignal) {
+            if (sourceSignal.aborted) controller.abort(sourceSignal.reason);
+            else {
+                sourceAbort = () => controller.abort(sourceSignal.reason);
+                sourceSignal.addEventListener('abort', sourceAbort, { once: true });
+            }
+        }
+
+        let deadlineTriggered = false;
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => {
+                deadlineTriggered = true;
+                controller.abort(new Error('provider deadline exceeded'));
+                reject(this.deadlineError(req));
+            }, remaining);
+        });
+        const executionRequest: AIRequest = {
+            ...req,
+            requestDetails: { ...req.requestDetails, signal: controller.signal },
+        };
+
+        try {
+            const response = await Promise.race([
+                this.networkExecutor!(executionRequest, provider),
+                timeoutPromise,
+            ]);
+            this.healthTracker.reportSuccess(provider, req.requestDetails.modelOverride ?? response.model);
+            this.concurrencyManager.recordSuccess();
+            this.finalizeRequest(req);
+            req.resolve(response);
+        } catch (error: any) {
+            if (deadlineTriggered || Date.now() >= req.deadlineAt) {
+                this.finalizeRequest(req);
+                req.reject(this.deadlineError(req));
+            } else if (sourceSignal?.aborted) {
+                this.finalizeRequest(req);
+                req.reject(new Error('PROVIDER_CANCELLED: request was cancelled.'));
+            } else {
+                this.handleFailure(req, provider, error);
+            }
+        } finally {
+            if (timeout) clearTimeout(timeout);
+            if (sourceSignal && sourceAbort) sourceSignal.removeEventListener('abort', sourceAbort);
+        }
+    }
+
+    private handleFailure(req: AIRequest, provider: AIProviderKind, error: unknown): void {
+        this.finalizeRequest(req);
+        const classified = error instanceof ProviderError ? error : classifyProviderError(error, provider);
+        const model = req.requestDetails.modelOverride;
+        this.healthTracker.reportFailure(provider, classified, model);
+        req.lastError = `${classified.code}: ${classified.message}`;
+        if (classified.code === 'RATE_LIMIT') this.concurrencyManager.recordOverload();
+        if (classified.isFatal) req.fatalProviders.add(provider);
+
+        req.providerIndex++;
+        if (req.providerIndex >= req.providerSequence.length) {
+            req.providerIndex = 0;
+            req.round++;
+        }
+        if (req.fatalProviders.size >= req.providerSequence.length || req.round >= SYSTEM_CONFIG.MAX_PROVIDER_ROUNDS) {
+            req.reject(this.exhaustedError(req));
+            return;
+        }
+        if (Date.now() >= req.deadlineAt) {
+            req.reject(this.deadlineError(req));
+            return;
+        }
+
+        const delay = classified.isFatal ? 0 : RetryHandler.calculateDelay(req.round, classified.retryAfterMs);
+        const remaining = Math.max(0, req.deadlineAt - Date.now());
+        logger.warn('Provider request failed; scheduling next candidate', {
+            provider,
+            code: classified.code,
+            nextIndex: req.providerIndex,
+            round: req.round,
+            delay: Math.min(delay, remaining),
+        });
+        setTimeout(() => {
+            if (Date.now() >= req.deadlineAt) {
+                req.reject(this.deadlineError(req));
+                return;
+            }
+            this.queue.unshift(req);
+            void this.startProcessor();
+        }, Math.min(delay, remaining));
+    }
+
+'''
+          s = s[:a] + replacement + s[b:]
+          s = s.replace("""        for (const request of this.queue) {\n            if (now >= request.deadlineAt) request.reject(this.deadlineError(request));\n            else retained.push(request);\n        }\n""", """        for (const request of this.queue) {\n            if (request.requestDetails.signal?.aborted) request.reject(new Error('PROVIDER_CANCELLED: request was cancelled.'));\n            else if (now >= request.deadlineAt) request.reject(this.deadlineError(request));\n            else retained.push(request);\n        }\n""", 1)
+          old = """    private deadlineError(req: AIRequest): Error {\n        return new Error(\n            `PROVIDER_TIMEOUT: request exceeded ${SYSTEM_CONFIG.REQUEST_DEADLINE_MS}ms without a usable provider.` +\n            (req.lastError ? ` Last error: ${req.lastError}` : ''),\n        );\n    }\n\n"""
+          new = """    private deadlineError(req: AIRequest): Error {\n        const timeoutMs = Math.max(0, req.deadlineAt - req.enqueuedAt);\n        return new Error(\n            `PROVIDER_TIMEOUT: request exceeded ${timeoutMs}ms without a usable provider.` +\n            (req.lastError ? ` Last error: ${req.lastError}` : ''),\n        );\n    }\n\n    private exhaustedError(req: AIRequest): Error {\n        return new Error(\n            `PROVIDER_EXHAUSTED: ${req.providerSequence.join(', ')} exhausted.` +\n            (req.lastError ? ` Last error: ${req.lastError}` : ''),\n        );\n    }\n\n"""
+          if old not in s: raise SystemExit('deadline anchor not found')
+          s = s.replace(old, new, 1)
+          anchor = '    getInternalMetrics(): {\n'
+          helper = """    private positiveInt(value: number | undefined, fallback: number): number {\n        return Number.isFinite(value) && value! > 0 ? Math.floor(value!) : fallback;\n    }\n\n"""
+          if anchor not in s: raise SystemExit('metrics anchor not found')
+          s = s.replace(anchor, helper + anchor, 1)
+          p.write_text(s)
+          PY
+      - name: Verify scheduler reliability
+        run: |
+          npm ci
+          npm run build
+          node --test tests/provider-reliability.test.cjs tests/production-assurance.test.cjs tests/mutation-journal.test.cjs tests/security-runtime.test.cjs
+      - name: Commit scheduler patch
+        run: |
+          rm .github/workflows/assurance-scheduler-patch.yml
+          git config user.name "codebase-os-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/core/orchestrator/TrafficController.ts .github/workflows/assurance-scheduler-patch.yml
+          git commit -m "feat: enforce provider deadlines and fatal failover"
+          git push origin HEAD:agent/production-assurance-v2
