@@ -1,0 +1,88 @@
+name: Apply mutation journal integration
+
+on:
+  push:
+    branches:
+      - agent/production-assurance-v2
+    paths:
+      - .github/workflows/assurance-journal-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/production-assurance-v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply journal integration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/storage/Database.ts')
+          s = p.read_text()
+          anchor = "          CREATE TABLE IF NOT EXISTS impact_reports ("
+          table = """          CREATE TABLE IF NOT EXISTS mutation_transactions (\n            id TEXT PRIMARY KEY,\n            session_id TEXT NOT NULL,\n            step INTEGER NOT NULL,\n            operation TEXT NOT NULL,\n            source_path TEXT,\n            destination_path TEXT NOT NULL,\n            original_content TEXT NOT NULL,\n            updated_content TEXT,\n            state TEXT NOT NULL,\n            created_at INTEGER NOT NULL,\n            updated_at INTEGER NOT NULL,\n            error TEXT\n          );\n\n          CREATE INDEX IF NOT EXISTS idx_mutation_transactions_session ON mutation_transactions(session_id);\n          CREATE INDEX IF NOT EXISTS idx_mutation_transactions_state ON mutation_transactions(state);\n\n"""
+          if 'CREATE TABLE IF NOT EXISTS mutation_transactions' not in s:
+              s = s.replace(anchor, table + anchor)
+          marker = "        this.db.prepare('INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(1, Date.now());\n"
+          if "run(2, Date.now())" not in s:
+              s = s.replace(marker, marker + "        this.db.prepare('INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(2, Date.now());\n")
+          p.write_text(s)
+
+          p = Path('src/storage/MutationJournal.ts')
+          s = p.read_text()
+          marker = """    markCommitted(id: string): void {\n        this.transition(id, ['APPLIED'], 'COMMITTED');\n    }\n\n"""
+          replacement = marker + """    commit(id: string, persistHistory: () => void): void {\n        this.db.transaction(() => {\n            persistHistory();\n            this.transition(id, ['APPLIED'], 'COMMITTED');\n        });\n    }\n\n"""
+          if 'commit(id: string, persistHistory' not in s:
+              if marker not in s:
+                  raise SystemExit('MutationJournal commit anchor not found')
+              s = s.replace(marker, replacement)
+          p.write_text(s)
+
+          p = Path('src/core/ai/MutationTransaction.ts')
+          s = p.read_text()
+          if "MutationJournal" not in s:
+              s = s.replace("import type { ChangeHistory } from '../../storage/ChangeHistory.js';", "import type { ChangeHistory } from '../../storage/ChangeHistory.js';\nimport type { MutationJournal } from '../../storage/MutationJournal.js';")
+          old_ctor = """        private sessionId: string,\n        private provider: AIProviderKind,\n    ) {}\n"""
+          new_ctor = """        private sessionId: string,\n        private provider: AIProviderKind,\n        private journal?: MutationJournal,\n    ) {}\n"""
+          if old_ctor in s:
+              s = s.replace(old_ctor, new_ctor, 1)
+          old = """    async execute(step: number, action: MutationAction): Promise<MutationResult> {\n        let snapshot: Snapshot;\n        try {\n            snapshot = this.snapshot(action);\n        } catch (err) {\n            return { success: false, output: '', error: String(err), affectedPaths: [] };\n        }\n\n        const toolResult = await this.apply(action);\n        if (!toolResult.success) return { ...toolResult, affectedPaths: [] };\n\n        let updated = '';\n        try {\n            if (snapshot.operation !== 'delete') updated = fs.readFileSync(snapshot.destination, 'utf8');\n            this.record(step, snapshot, updated);\n        } catch (persistError) {\n            const compensation = this.compensate(snapshot, updated);\n            if (!compensation.success) {\n                return {\n                    success: false,\n                    output: '',\n                    error:\n                        `CRITICAL_TRANSACTION_DIVERGENCE: history persistence failed (${String(persistError)}), ` +\n                        `and compensation could not safely restore pre-state (${compensation.error}). Manual recovery required.`,\n                    affectedPaths: this.paths(snapshot),\n                };\n            }\n            return {\n                success: false,\n                output: '',\n                error: `History persistence failed; filesystem mutation was compensated: ${String(persistError)}`,\n                affectedPaths: [],\n            };\n        }\n\n        return {\n            ...toolResult,\n            affectedPaths: this.paths(snapshot),\n            operation: snapshot.operation,\n        };\n    }\n"""
+          new = """    async execute(step: number, action: MutationAction): Promise<MutationResult> {\n        let snapshot: Snapshot;\n        let journalId: string | undefined;\n        try {\n            snapshot = this.snapshot(action);\n            if (this.journal) {\n                journalId = this.journal.begin({\n                    sessionId: this.sessionId,\n                    step,\n                    operation: snapshot.operation,\n                    sourcePath: snapshot.relativeSource,\n                    destinationPath: snapshot.relativeDestination,\n                    originalContent: snapshot.original,\n                });\n            }\n        } catch (err) {\n            return { success: false, output: '', error: String(err), affectedPaths: [] };\n        }\n\n        const toolResult = await this.apply(action);\n        if (!toolResult.success) {\n            if (journalId && this.journal) {\n                try { this.journal.markRolledBack(journalId, toolResult.error || 'Filesystem mutation was not applied.'); } catch { /* surfaced by original failure */ }\n            }\n            return { ...toolResult, affectedPaths: [] };\n        }\n\n        let updated = '';\n        try {\n            if (snapshot.operation !== 'delete') updated = fs.readFileSync(snapshot.destination, 'utf8');\n            if (journalId && this.journal) {\n                this.journal.markApplied(journalId, updated);\n                this.journal.commit(journalId, () => this.record(step, snapshot, updated));\n            } else {\n                this.record(step, snapshot, updated);\n            }\n        } catch (persistError) {\n            const compensation = this.compensate(snapshot, updated);\n            if (journalId && this.journal) {\n                try {\n                    if (compensation.success) this.journal.markRolledBack(journalId, String(persistError));\n                    else this.journal.markDiverged(journalId, compensation.error || String(persistError));\n                } catch { /* original persistence failure remains authoritative */ }\n            }\n            if (!compensation.success) {\n                return {\n                    success: false,\n                    output: '',\n                    error:\n                        `CRITICAL_TRANSACTION_DIVERGENCE: durable persistence failed (${String(persistError)}), ` +\n                        `and compensation could not safely restore pre-state (${compensation.error}). Manual recovery required.`,\n                    affectedPaths: this.paths(snapshot),\n                };\n            }\n            return {\n                success: false,\n                output: '',\n                error: `Durable persistence failed; filesystem mutation was compensated: ${String(persistError)}`,\n                affectedPaths: [],\n            };\n        }\n\n        return {\n            ...toolResult,\n            affectedPaths: this.paths(snapshot),\n            operation: snapshot.operation,\n        };\n    }\n"""
+          if old not in s:
+              raise SystemExit('MutationTransaction execute block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('src/core/ai/AgentRuntime.ts')
+          s = p.read_text()
+          if "MutationJournal" not in s:
+              s = s.replace("import { ChangeHistory } from '../../storage/ChangeHistory.js';", "import { ChangeHistory } from '../../storage/ChangeHistory.js';\nimport { MutationJournal } from '../../storage/MutationJournal.js';")
+          old = """        this.mutationTransaction = new MutationTransaction(\n            rootDir,\n            new ChangeHistory(db),\n            sessionId,\n            provider.kind,\n        );\n"""
+          new = """        const mutationJournal = new MutationJournal(db);\n        const recovery = mutationJournal.recoverIncomplete(rootDir);\n        if (recovery.diverged > 0) {\n            throw new Error(`MUTATION_RECOVERY_DIVERGED: ${recovery.diverged} incomplete mutation(s) require manual recovery.`);\n        }\n        this.mutationTransaction = new MutationTransaction(\n            rootDir,\n            new ChangeHistory(db),\n            sessionId,\n            provider.kind,\n            mutationJournal,\n        );\n"""
+          if old not in s:
+              raise SystemExit('AgentRuntime mutation construction block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+      - name: Verify mutation durability
+        run: |
+          npm ci
+          npm run build
+          node --test tests/mutation-journal.test.cjs tests/production-assurance.test.cjs tests/security-runtime.test.cjs
+      - name: Commit verified integration
+        run: |
+          rm .github/workflows/assurance-journal-patch.yml
+          git config user.name "codebase-os-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/storage/Database.ts src/storage/MutationJournal.ts src/core/ai/MutationTransaction.ts src/core/ai/AgentRuntime.ts .github/workflows/assurance-journal-patch.yml
+          git commit -m "feat: add crash-recoverable mutation journal"
+          git push origin HEAD:agent/production-assurance-v2
