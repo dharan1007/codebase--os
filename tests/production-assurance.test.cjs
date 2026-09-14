@@ -31,19 +31,9 @@ test('verification rejects evidence when repository state changes while gates ex
   fs.writeFileSync(path.join(root, 'src', 'a.js'), 'export const value = 1;\n');
   initGitRepo(root);
   fs.writeFileSync(path.join(root, 'src', 'a.js'), 'export const value = 2;\n');
-
   let calls = 0;
-  const sandbox = {
-    async execute() {
-      calls++;
-      fs.writeFileSync(path.join(root, 'src', 'a.js'), `export const value = ${2 + calls};\n`);
-      return { success: true, output: 'ok', exitCode: 0 };
-    },
-  };
-
-  const engine = new VerificationEngine(root, {}, sandbox);
-  const report = await engine.verify(['src/a.js']);
-
+  const sandbox = { async execute() { calls++; fs.writeFileSync(path.join(root, 'src', 'a.js'), `export const value = ${2 + calls};\n`); return { success:true, output:'ok', exitCode:0 }; } };
+  const report = await new VerificationEngine(root, {}, sandbox).verify(['src/a.js']);
   assert.equal(report.success, false);
   assert.ok(report.checks.some(check => check.name === 'workspace-freshness' && check.success === false));
   assert.equal(typeof report.workspaceFingerprint, 'string');
@@ -53,29 +43,22 @@ test('verification rejects evidence when repository state changes while gates ex
 test('database enables full synchronous durability and versioned schema metadata', t => {
   const root = tempRoot(t);
   const db = new Database(root);
-  t.after(() => db.close());
-
   const synchronous = db.raw.pragma('synchronous', { simple: true });
+  const migrationTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get();
+  const quickCheckType = typeof db.quickCheck;
+  const result = db.quickCheck();
+  db.close();
   assert.equal(Number(synchronous), 2);
-
-  const migrationTable = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
-  ).get();
   assert.ok(migrationTable);
-
-  assert.equal(typeof db.quickCheck, 'function');
-  if (typeof db.quickCheck === 'function') {
-    const result = db.quickCheck();
-    assert.equal(result.ok, true);
-    assert.equal(result.message.toLowerCase(), 'ok');
-  }
+  assert.equal(quickCheckType, 'function');
+  assert.equal(result.ok, true);
+  assert.equal(result.message.toLowerCase(), 'ok');
 });
 
 test('default Node sandbox image stays on a supported runtime line', t => {
   const root = tempRoot(t);
   const sandbox = new SandboxManager(root);
-  const image = sandbox.imageForCommand('node');
-  assert.match(image, /^node:(?:22|24)(?:[.-]|$)/);
+  assert.match(sandbox.imageForCommand('node'), /^node:(?:22|24)(?:[.-]|$)/);
 });
 
 test('rate-limit circuit becomes eligible again after its cooldown expires', t => {
@@ -83,13 +66,11 @@ test('rate-limit circuit becomes eligible again after its cooldown expires', t =
   let now = 1_000_000;
   Date.now = () => now;
   t.after(() => { Date.now = originalNow; });
-
   const tracker = new ProviderHealthTracker();
   tracker.reportFailure('openai', new Error('429 rate limit'));
   tracker.reportFailure('openai', new Error('429 rate limit'));
   tracker.reportFailure('openai', new Error('429 rate limit'));
   assert.equal(tracker.isHealthy('openai'), false);
-
   now += 136_000;
   assert.equal(tracker.isHealthy('openai'), true);
   assert.ok(tracker.getWeight('openai') > 0);
