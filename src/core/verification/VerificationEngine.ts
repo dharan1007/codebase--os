@@ -4,6 +4,7 @@ import yaml from 'yaml';
 import type { RelationshipGraph } from '../graph/RelationshipGraph.js';
 import { SandboxManager, type SandboxResult } from '../sandbox/SandboxManager.js';
 import { parseBabel, detectLanguage } from '../../utils/ast.js';
+import { WorkspaceFingerprint } from './WorkspaceFingerprint.js';
 
 export interface VerificationCheck {
     name: string;
@@ -19,6 +20,7 @@ export interface VerificationReport {
     checks: VerificationCheck[];
     commands: string[];
     summary: string;
+    workspaceFingerprint: string;
 }
 
 /** Independent post-mutation verification. The model never chooses these gates. */
@@ -30,13 +32,14 @@ export class VerificationEngine {
     ) {}
 
     async verify(changedFiles: string[]): Promise<VerificationReport> {
+        const workspaceFingerprint = WorkspaceFingerprint.capture(this.rootDir);
         const normalizedFiles = [...new Set(changedFiles.map(file =>
             path.isAbsolute(file) ? path.resolve(file) : path.resolve(this.rootDir, file),
         ))];
         const checks: VerificationCheck[] = [];
 
         checks.push(...this.runLocalSyntaxChecks(normalizedFiles));
-        if (checks.some(check => !check.success)) return this.finish(checks);
+        if (checks.some(check => !check.success)) return this.finish(checks, workspaceFingerprint);
 
         const commands = this.discoverVerificationCommands(normalizedFiles);
         if (commands.length === 0 && normalizedFiles.length > 0) {
@@ -49,7 +52,7 @@ export class VerificationEngine {
                     'No executable verification strategy was found for the changed project. ' +
                     'Add a build/test/typecheck script or a supported language manifest before autonomous completion.',
             });
-            return this.finish(checks);
+            return this.finish(checks, workspaceFingerprint);
         }
 
         for (const command of commands) {
@@ -58,7 +61,22 @@ export class VerificationEngine {
             checks.push(this.commandCheck(command, result, Date.now() - start));
             if (!result.success) break;
         }
-        return this.finish(checks);
+
+        const currentFingerprint = WorkspaceFingerprint.capture(this.rootDir);
+        if (currentFingerprint !== workspaceFingerprint) {
+            checks.push({
+                name: 'workspace-freshness',
+                success: false,
+                durationMs: 0,
+                output: '',
+                error: 'Repository state changed while verification gates were running. Evidence is stale.',
+            });
+        }
+        return this.finish(checks, workspaceFingerprint);
+    }
+
+    isReportFresh(report: VerificationReport): boolean {
+        return report.success && WorkspaceFingerprint.capture(this.rootDir) === report.workspaceFingerprint;
     }
 
     private runLocalSyntaxChecks(files: string[]): VerificationCheck[] {
@@ -192,13 +210,13 @@ export class VerificationEngine {
         };
     }
 
-    private finish(checks: VerificationCheck[]): VerificationReport {
+    private finish(checks: VerificationCheck[], workspaceFingerprint: string): VerificationReport {
         const failures = checks.filter(check => !check.success);
         const success = checks.length > 0 && failures.length === 0;
         const commands = checks.flatMap(check => check.command ? [check.command] : []);
         const summary = success
             ? `Verification passed: ${checks.length} check(s), ${commands.length} command gate(s).`
             : `Verification failed: ${failures.length} of ${checks.length} check(s) failed.`;
-        return { success, checks, commands, summary };
+        return { success, checks, commands, summary, workspaceFingerprint };
     }
 }

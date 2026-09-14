@@ -271,7 +271,7 @@ export class SandboxManager {
             }
             return image;
         }
-        return process.env['COS_SANDBOX_NODE_IMAGE'] || 'node:20-bookworm-slim';
+        return process.env['COS_SANDBOX_NODE_IMAGE'] || 'node:22-bookworm-slim';
     }
 
     private wrapPackageManagerCommand(command: string, bin: string): string {

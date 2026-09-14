@@ -213,6 +213,14 @@ export class AgentLoop {
                             this.saveCheckpoint(messages);
                             continue;
                         }
+                        if (!this.verificationEngine.isReportFresh(verification)) {
+                            messages.push({
+                                role: 'user',
+                                content: '[COMPLETION REJECTED]: Repository state changed after verification. Run verification again against the current workspace.',
+                            });
+                            this.saveCheckpoint(messages);
+                            continue;
+                        }
                         this.lastVerificationStep = stepCount;
                     }
                     completed = true;
