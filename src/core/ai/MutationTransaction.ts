@@ -3,6 +3,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { AIProviderKind, ChangeOperation } from '../../types/index.js';
 import type { ChangeHistory } from '../../storage/ChangeHistory.js';
+import type { MutationJournal } from '../../storage/MutationJournal.js';
 import { computeDiff } from '../../utils/diff.js';
 import { resolveWithinRoot } from '../security/PathPolicy.js';
 import {
@@ -50,31 +51,59 @@ export class MutationTransaction {
         private history: ChangeHistory,
         private sessionId: string,
         private provider: AIProviderKind,
+        private journal?: MutationJournal,
     ) {}
 
     async execute(step: number, action: MutationAction): Promise<MutationResult> {
         let snapshot: Snapshot;
+        let journalId: string | undefined;
         try {
             snapshot = this.snapshot(action);
+            if (this.journal) {
+                journalId = this.journal.begin({
+                    sessionId: this.sessionId,
+                    step,
+                    operation: snapshot.operation,
+                    sourcePath: snapshot.relativeSource,
+                    destinationPath: snapshot.relativeDestination,
+                    originalContent: snapshot.original,
+                });
+            }
         } catch (err) {
             return { success: false, output: '', error: String(err), affectedPaths: [] };
         }
 
         const toolResult = await this.apply(action);
-        if (!toolResult.success) return { ...toolResult, affectedPaths: [] };
+        if (!toolResult.success) {
+            if (journalId && this.journal) {
+                try { this.journal.markRolledBack(journalId, toolResult.error || 'Filesystem mutation was not applied.'); } catch { /* surfaced by original failure */ }
+            }
+            return { ...toolResult, affectedPaths: [] };
+        }
 
         let updated = '';
         try {
             if (snapshot.operation !== 'delete') updated = fs.readFileSync(snapshot.destination, 'utf8');
-            this.record(step, snapshot, updated);
+            if (journalId && this.journal) {
+                this.journal.markApplied(journalId, updated);
+                this.journal.commit(journalId, () => this.record(step, snapshot, updated));
+            } else {
+                this.record(step, snapshot, updated);
+            }
         } catch (persistError) {
             const compensation = this.compensate(snapshot, updated);
+            if (journalId && this.journal) {
+                try {
+                    if (compensation.success) this.journal.markRolledBack(journalId, String(persistError));
+                    else this.journal.markDiverged(journalId, compensation.error || String(persistError));
+                } catch { /* original persistence failure remains authoritative */ }
+            }
             if (!compensation.success) {
                 return {
                     success: false,
                     output: '',
                     error:
-                        `CRITICAL_TRANSACTION_DIVERGENCE: history persistence failed (${String(persistError)}), ` +
+                        `CRITICAL_TRANSACTION_DIVERGENCE: durable persistence failed (${String(persistError)}), ` +
                         `and compensation could not safely restore pre-state (${compensation.error}). Manual recovery required.`,
                     affectedPaths: this.paths(snapshot),
                 };
@@ -82,7 +111,7 @@ export class MutationTransaction {
             return {
                 success: false,
                 output: '',
-                error: `History persistence failed; filesystem mutation was compensated: ${String(persistError)}`,
+                error: `Durable persistence failed; filesystem mutation was compensated: ${String(persistError)}`,
                 affectedPaths: [],
             };
         }

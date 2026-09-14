@@ -13,6 +13,7 @@ import { LocalServer } from '../server/LocalServer.js';
 import { FailureStore } from '../failure/FailureStore.js';
 import { ResourceMonitor } from '../orchestrator/ResourceMonitor.js';
 import { ChangeHistory } from '../../storage/ChangeHistory.js';
+import { MutationJournal } from '../../storage/MutationJournal.js';
 import { MutationTransaction, type MutationAction } from './MutationTransaction.js';
 import { AgentController, type AgentBudget } from './AgentController.js';
 import { ContextManager } from '../context/ContextManager.js';
@@ -124,11 +125,17 @@ export class AgentLoop {
         this.verificationEngine = new VerificationEngine(rootDir, graph, this.sandboxManager);
         this.cognitiveState = new CognitiveState(sessionId, db, provider);
         this.cognitiveState.restore();
+        const mutationJournal = new MutationJournal(db);
+        const recovery = mutationJournal.recoverIncomplete(rootDir);
+        if (recovery.diverged > 0) {
+            throw new Error(`MUTATION_RECOVERY_DIVERGED: ${recovery.diverged} incomplete mutation(s) require manual recovery.`);
+        }
         this.mutationTransaction = new MutationTransaction(
             rootDir,
             new ChangeHistory(db),
             sessionId,
             provider.kind,
+            mutationJournal,
         );
 
         const budget: AgentBudget = {

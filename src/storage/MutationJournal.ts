@@ -68,6 +68,13 @@ export class MutationJournal {
         this.transition(id, ['APPLIED'], 'COMMITTED');
     }
 
+    commit(id: string, persistHistory: () => void): void {
+        this.db.transaction(() => {
+            persistHistory();
+            this.transition(id, ['APPLIED'], 'COMMITTED');
+        });
+    }
+
     markRolledBack(id: string, error?: string): void {
         this.transition(id, ['PREPARED', 'APPLIED'], 'ROLLED_BACK', undefined, error);
     }

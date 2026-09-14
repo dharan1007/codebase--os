@@ -132,6 +132,24 @@ export class Database {
           CREATE INDEX IF NOT EXISTS idx_change_records_file ON change_records(file_path);
           CREATE INDEX IF NOT EXISTS idx_change_records_applied ON change_records(applied_at);
 
+          CREATE TABLE IF NOT EXISTS mutation_transactions (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            step INTEGER NOT NULL,
+            operation TEXT NOT NULL,
+            source_path TEXT,
+            destination_path TEXT NOT NULL,
+            original_content TEXT NOT NULL,
+            updated_content TEXT,
+            state TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            error TEXT
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_mutation_transactions_session ON mutation_transactions(session_id);
+          CREATE INDEX IF NOT EXISTS idx_mutation_transactions_state ON mutation_transactions(state);
+
           CREATE TABLE IF NOT EXISTS impact_reports (
             id TEXT PRIMARY KEY,
             trigger_change_json TEXT NOT NULL,
@@ -227,6 +245,7 @@ export class Database {
         this.ensureColumn('change_records', 'operation', "TEXT NOT NULL DEFAULT 'modify'");
         this.ensureColumn('change_records', 'source_path', 'TEXT');
         this.db.prepare('INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(1, Date.now());
+        this.db.prepare('INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(2, Date.now());
     }
 
     private ensureColumn(table: string, column: string, definition: string): void {
