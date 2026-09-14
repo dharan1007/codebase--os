@@ -41,17 +41,28 @@ export class Database {
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('busy_timeout = 5000');
         this.db.pragma('foreign_keys = ON');
-        this.db.pragma('synchronous = NORMAL');
+        this.db.pragma('synchronous = FULL');
         this.db.pragma('cache_size = -32000');
         this.db.pragma('temp_store = MEMORY');
         this.db.pragma('mmap_size = 536870912');
         this.initialize();
+        const integrity = this.quickCheck();
+        if (!integrity.ok) {
+            this.db.close();
+            this.closed = true;
+            throw new Error(`Codebase OS database integrity check failed: ${integrity.message}`);
+        }
         activeInstances.add(this);
         logger.debug('Database initialized', { path: dbPath });
     }
 
     private initialize(): void {
         this.db.exec(`
+          CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at INTEGER NOT NULL
+          );
+
           CREATE TABLE IF NOT EXISTS graph_nodes (
             id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
@@ -215,6 +226,7 @@ export class Database {
         this.ensureColumn('graph_nodes', 'embedding', 'BLOB');
         this.ensureColumn('change_records', 'operation', "TEXT NOT NULL DEFAULT 'modify'");
         this.ensureColumn('change_records', 'source_path', 'TEXT');
+        this.db.prepare('INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(1, Date.now());
     }
 
     private ensureColumn(table: string, column: string, definition: string): void {
@@ -222,6 +234,13 @@ export class Database {
         if (columns.some(existing => existing.name === column)) return;
         logger.info('Applying database migration', { table, column });
         this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+
+    quickCheck(): { ok: boolean; message: string } {
+        if (this.closed) throw new Error('Database is closed.');
+        const result = this.db.pragma('quick_check', { simple: true });
+        const message = String(result ?? 'unknown');
+        return { ok: message.toLowerCase() === 'ok', message };
     }
 
     prepare(sql: string): any {
