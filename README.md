@@ -1,8 +1,7 @@
 # Codebase OS
 
-[![CI](https://github.com/dharan1007/codebase--os/actions/workflows/ci.yml/badge.svg)](https://github.com/dharan1007/codebase--os/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Node](https://img.shields.io/badge/Node-22%20%7C%2024-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/Node-22%2B-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![License](https://img.shields.io/badge/License-Proprietary-6b7280?style=flat-square)](LICENSE)
 
 **Codebase OS is a local software-change runtime for AI-assisted engineering.** It combines repository scanning, a persistent typed relationship graph, dependency-first planning, transactional file mutation, durable engineering memory, isolated command execution, independent verification, and conflict-safe rollback.
@@ -214,20 +213,19 @@ If verification fails, the propagation batch is reverted when the files still ma
 
 The dashboard binds only to `127.0.0.1`, applies browser security headers, constrains static file serving to the UI root, rejects non-local/cross-origin approval mutations, and falls back to an available loopback port if the preferred port is busy.
 
-## CI and release gate
+## Local verification commands
 
-The repository CI qualifies Node 22 and Node 24 on Ubuntu, Windows and macOS. Every matrix cell runs a locked install plus typecheck, production build and tests. Canonical Ubuntu/Node 22 qualification also inspects the npm publish payload and installs the packed tarball into a clean temporary prefix before running the packaged `cos --help` entrypoint.
+The current default branch has no GitHub Actions workflows. These commands are defined in `package.json` for local verification; their presence does not mean they have run in hosted CI.
 
-```text
-npm ci
+```bash
+npm run typecheck
+npm run build
+npm test
 npm run verify
-npm pack --dry-run        # canonical Ubuntu/Node 22
-npm run package:smoke     # canonical Ubuntu/Node 22
+npm run package:smoke
 ```
 
-`npm run verify` combines typecheck, build and tests, and `prepublishOnly` executes the same verification gate.
-
-A green badge means the actual GitHub Actions workflow succeeded for that ref. This README deliberately does not use a static “passing” badge.
+`npm run verify` runs typecheck, build and tests. `npm run package:smoke` is a separate package smoke check. This README makes no hosted CI or passing-check claim.
 
 ## Current scope and non-claims
 
